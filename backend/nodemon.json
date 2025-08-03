@@ -1,0 +1,22 @@
+{
+  "watch": ["./**/*.go"],
+  "ignore": [
+    "disk_files/**",
+    "tmp/**",
+    "vendor/**",
+    ".git/**",
+    "node_modules/**"
+  ],
+  "ext": "go",
+  "exec": "go run ./main.go",
+  "legacyWatch": false,
+  "pollingInterval": 1000,
+  "delay": 1500,
+  "env": {
+    "GO_ENV": "development"
+  },
+  "execMap": {
+    "go": "go"
+  },
+  "signal": "SIGTERM"
+}
