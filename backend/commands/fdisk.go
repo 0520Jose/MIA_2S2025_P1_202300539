@@ -32,13 +32,13 @@ func Fdisk(params map[string]string) {
 
     tamanioBytes := size
     switch unit {
-    case "B":
     case "K":
         tamanioBytes *= 1024
     case "M":
         tamanioBytes *= 1024 * 1024
+    case "B":
     default:
-        fmt.Println("Error: unit inválida (B, K, M)")
+        fmt.Println("Error: unidad inválida (use B, K o M)")
         return
     }
 
@@ -54,6 +54,28 @@ func Fdisk(params map[string]string) {
         default:
             fmt.Println("Error: type inválido (P, E, L)")
             return
+        }
+    }
+
+    if partType == 'E' {
+        file, err := os.OpenFile(path, os.O_RDONLY, 0644)
+        if err != nil {
+            fmt.Println("Error abriendo disco:", err)
+            return
+        }
+        defer file.Close()
+
+        mbr, err := structs.LeerMBR(file)
+        if err != nil {
+            fmt.Println("Error leyendo MBR:", err)
+            return
+        }
+
+        for _, p := range mbr.Mbr_partitions {
+            if p.Part_type == 'E' && p.Part_status == 1 {
+                fmt.Println("Error: solo puede haber una partición extendida por disco")
+                return
+            }
         }
     }
 

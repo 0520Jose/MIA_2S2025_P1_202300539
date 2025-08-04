@@ -26,6 +26,9 @@ func ExecuteCommand(fullCommand string) string {
     case "rmdisk":
         Rmdisk(args)
         return "Comando rmdisk ejecutado."
+    case "mounted":
+        Mounted()
+        return "Comando mounted ejecutado."
     default:
         return "Comando no reconocido: " + command
     }

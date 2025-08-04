@@ -15,7 +15,6 @@ func limpiarRuta(ruta string) (string, error) {
     primerCar := ruta[0]
     ultimoCar := ruta[len(ruta)-1]
 
-    // Verificar comillas balanceadas
     if primerCar == '"' && ultimoCar != '"' {
         return "", errors.New("comillas no balanceadas")
     }
@@ -24,12 +23,10 @@ func limpiarRuta(ruta string) (string, error) {
         return "", errors.New("comillas no balanceadas")
     }
 
-    // Si tiene comillas balanceadas, removerlas
     if primerCar == '"' && ultimoCar == '"' {
         return ruta[1 : len(ruta)-1], nil
     }
 
-    // Rechazar comillas simples
     if primerCar == '\'' || ultimoCar == '\'' {
         return "", errors.New("comillas simples no permitidas")
     }
