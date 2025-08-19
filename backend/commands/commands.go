@@ -15,22 +15,27 @@ func ExecuteCommand(fullCommand string) string {
 
     switch command {
     case "mkdisk":
-        Mkdisk(args)
-        return "Comando mkdisk ejecutado."
+        return Mkdisk(args)
     case "fdisk":
-        Fdisk(args)
-        return "Comando fdisk ejecutado."
+        return Fdisk(args)
     case "mount":
-        Mount(args)
-        return "Comando mount ejecutado."
+        return Mount(args)
     case "rmdisk":
-        Rmdisk(args)
-        return "Comando rmdisk ejecutado."
+        return Rmdisk(args)
     case "mounted":
-        Mounted()
-        return "Comando mounted ejecutado."
+        return Mounted()
+    case "mkfs":
+        return Mkfs(args)
+    case "login":
+        return Login(args)
+    case "logout":
+        return Logout()
+    case "cat":
+        return Cat(args)
+    case "mkgrp":
+        return Mkgrp(args)
     default:
-        return "Comando no reconocido: " + command
+        return ""
     }
 }
 

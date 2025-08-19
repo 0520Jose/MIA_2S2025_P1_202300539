@@ -24,16 +24,17 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 
     var req CommandRequest
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Error decoding request body", http.StatusBadRequest)
+        http.Error(w, "Error de decodificación del cuerpo de la solicitud", http.StatusBadRequest)
         return
     }
-    lines := strings.Split(req.Comando, "\n")
     var fullOutput strings.Builder
-    for _, line := range lines {
+    for _, line := range strings.Split(req.Comando, "\n") {
         trimmedLine := strings.TrimSpace(line)
         if trimmedLine != "" {
             output := commands.ExecuteCommand(trimmedLine)
-            fullOutput.WriteString(output + "\n")
+            if output != "" {
+                fullOutput.WriteString(output + "\n")
+            }
         }
     }
 
@@ -44,8 +45,8 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 func StartAPIServer(port string) {
     http.HandleFunc("/execute", executeHandler)
 
-    log.Println("Starting API server on port", port)
+    log.Println("Iniciando el servidor API en el puerto", port)
     if err := http.ListenAndServe(port, nil); err != nil {
-        log.Fatalf("Failed to start server: %v", err)
+        log.Fatalf("Error al iniciar el servidor: %v", err)
     }
 }

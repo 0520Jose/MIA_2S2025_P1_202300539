@@ -5,10 +5,9 @@ import (
 	"strings"
 )
 
-func Mounted() {
+func Mounted() string {
 	if len(particionesMontadas) == 0 {
-		fmt.Println("No hay particiones montadas")
-		return
+		return fmt.Sprintf("No hay particiones montadas")
 	}
 
 	ids := make([]string, len(particionesMontadas))
@@ -16,5 +15,5 @@ func Mounted() {
 		ids[i] = pm.Id
 	}
 
-	fmt.Println(strings.Join(ids, ", "))
+	return fmt.Sprintf("Particiones montadas: %s", strings.Join(ids, ", "))
 }

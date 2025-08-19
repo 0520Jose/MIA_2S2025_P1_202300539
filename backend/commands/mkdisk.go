@@ -12,34 +12,29 @@ import (
     "time"
 )
 
-func Mkdisk(params map[string]string) {
+func Mkdisk(params map[string]string) string {
     sizeStr, existe := params["-size"]
     if !existe {
-        fmt.Println("Error: parámetro -size es obligatorio")
-        return
+        return fmt.Sprintf("Error: parámetro -size es obligatorio")
     }
 
     size, err := strconv.Atoi(sizeStr)
     if err != nil || size <= 0 {
-        fmt.Println("Error: -size debe ser un entero positivo")
-        return
+        return fmt.Sprintf("Error: -size debe ser un entero positivo")
     }
 
     path, existe := params["-path"]
     if !existe {
-        fmt.Println("Error: parámetro -path es obligatorio")
-        return
+        return fmt.Sprintf("Error: parámetro -path es obligatorio")
     }
 
     path, err = limpiarRuta(path)
     if err != nil {
-        fmt.Println("Error en la ruta:", err)
-        return
+        return fmt.Sprintf("Error en la ruta: %v", err)
     }
 
     if !strings.HasSuffix(path, ".mia") {
-        fmt.Println("Error: el archivo debe tener extensión .mia")
-        return
+        return fmt.Sprintf("Error: el archivo debe tener extensión .mia")
     }
 
     unit := "M"
@@ -54,20 +49,40 @@ func Mkdisk(params map[string]string) {
     case "M":
         tamanioBytes *= 1024 * 1024
     default:
-        fmt.Println("Error: unit inválida (use K o M)")
-        return
+        return fmt.Sprintf("Error: unit inválida (use K o M)")
+    }
+
+    fit := "FF"
+    if f, existe := params["-fit"]; existe {
+        f = strings.ToUpper(f)
+        if f != "FF" && f != "BF" && f != "WF" {
+            return fmt.Sprintf("Error: fit inválido (use FF, BF o WF)")
+        }
+        fit = f
+    }
+
+    var fitChar byte
+    switch fit {
+    case "FF":
+        fitChar = 'F'
+    case "BF":
+        fitChar = 'B'
+    case "WF":
+        fitChar = 'W'
+    }
+
+    if _, err := os.Stat(path); err == nil {
+        return fmt.Sprintf("Error: ya existe un disco en %s", path)
     }
 
     carpetaPadre := filepath.Dir(path)
     if err := os.MkdirAll(carpetaPadre, 0755); err != nil {
-        fmt.Println("Error creando directorios:", err)
-        return
+        return fmt.Sprintf("Error creando directorios: %v", err)
     }
 
     archivo, err := os.Create(path)
     if err != nil {
-        fmt.Println("Error creando disco:", err)
-        return
+        return fmt.Sprintf("Error creando disco: %v", err)
     }
     defer archivo.Close()
 
@@ -78,8 +93,7 @@ func Mkdisk(params map[string]string) {
             buffer = make([]byte, tamanioBytes-bytesEscritos)
         }
         if _, err := archivo.Write(buffer); err != nil {
-            fmt.Println("Error escribiendo ceros:", err)
-            return
+            return fmt.Sprintf("Error escribiendo ceros: %v", err)
         }
         bytesEscritos += len(buffer)
     }
@@ -87,7 +101,7 @@ func Mkdisk(params map[string]string) {
     mbr := structs.MBR{
         Mbr_tamano:        int32(tamanioBytes),
         Mbr_dsk_signature: rand.Int31(),
-        Dsk_fit:           'F',
+        Dsk_fit:           fitChar,
     }
 
     fechaActual := time.Now().Format("2006-01-02T15:04")
@@ -95,9 +109,8 @@ func Mkdisk(params map[string]string) {
 
     archivo.Seek(0, 0)
     if err := binary.Write(archivo, binary.LittleEndian, &mbr); err != nil {
-        fmt.Println("Error escribiendo MBR:", err)
-        return
+        return fmt.Sprintf("Error escribiendo MBR: %v", err)
     }
 
-    fmt.Printf("Disco creado exitosamente: %s (%d bytes)\n", path, tamanioBytes)
+    return fmt.Sprintf("Disco creado exitosamente: %s (%d bytes) [fit=%s]\n", path, tamanioBytes, fit)
 }

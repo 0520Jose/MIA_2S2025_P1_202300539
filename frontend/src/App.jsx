@@ -27,8 +27,6 @@ function App() {
   };
 
   const ejecutarComandos = async () => {
-    setSalida(prev => prev + `> ${comando}\n`);
-
     const response = await fetch('http://localhost:8000/execute', {
       method: 'POST',
       headers: {
@@ -68,7 +66,7 @@ function App() {
           <div className='entradaComandos'>
             <h3>Entrada</h3>
             <textarea
-              placeholder='Escribe tus comandos aquí o carga un archivo... (Enter para ejecutar, Shift+Enter para nueva línea)'
+              placeholder='Escribe tus comandos aquí o carga un archivo... '
               value={comando}
               onChange={(e) => setComando(e.target.value)}
               onKeyPress={handleKeyPress}

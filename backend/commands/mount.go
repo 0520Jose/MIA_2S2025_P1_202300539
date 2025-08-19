@@ -8,63 +8,53 @@ import (
 )
 
 var (
-    particionesMontadas []PartitionMount
+    particionesMontadas []structs.PartitionMount
     contadorDiscos      = make(map[string]int)
     letrasDiscos        = make(map[string]string)
     letraActual         = 'A'
 )
 
-type PartitionMount struct {
-    Id        string
-    Path      string
-    Partition structs.Partition
-}
-
-func Mount(params map[string]string) {
+func Mount(params map[string]string) string {
     path := params["-path"]
     name := params["-name"]
 
     if path == "" || name == "" {
-        fmt.Println("Error: parámetros -path y -name son obligatorios")
-        return
+        return fmt.Sprintf("Error: parámetros -path y -name son obligatorios\n")
     }
 
     archivo, err := os.OpenFile(path, os.O_RDONLY, 0644)
     if err != nil {
-        fmt.Println("Error abriendo el disco:", err)
-        return
+        return fmt.Sprintf("Error abriendo el disco: %v\n", err)
     }
     defer archivo.Close()
 
     mbr, err := structs.LeerMBR(archivo)
     if err != nil {
-        fmt.Println("Error leyendo MBR:", err)
-        return
+        return fmt.Sprintf("Error leyendo MBR: %v\n", err)
     }
 
     var particion structs.Partition
     encontrada := false
+    indiceParticion := -1
 
-    for _, p := range mbr.Mbr_partitions {
+    for i, p := range mbr.Mbr_partitions {
         partitionName := strings.TrimRight(string(p.Part_name[:]), "\x00")
-        
-        if partitionName == name && p.Part_type == 'P' && p.Part_status == 1 {
+        if partitionName == name && p.Part_type == 'P' {
             particion = p
+            indiceParticion = i
             encontrada = true
             break
         }
     }
 
     if !encontrada {
-        fmt.Println("Error: no se encontró partición primaria activa con ese nombre")
-        return
+        return fmt.Sprintf("Error: no se encontró partición primaria con ese nombre\n")
     }
 
     for _, pm := range particionesMontadas {
         pmName := strings.TrimRight(string(pm.Partition.Part_name[:]), "\x00")
         if pm.Path == path && pmName == name {
-            fmt.Println("Error: partición ya montada")
-            return
+            return fmt.Sprintf("Error: partición ya montada\n")
         }
     }
 
@@ -85,16 +75,21 @@ func Mount(params map[string]string) {
     particion.Part_correlative = int32(contadorDiscos[path])
     copy(particion.Part_id[:], id)
 
-    particionesMontadas = append(particionesMontadas, PartitionMount{
+    mbr.Mbr_partitions[indiceParticion] = particion
+
+    particionesMontadas = append(particionesMontadas, structs.PartitionMount{
         Id:        id,
         Path:      path,
         Partition: particion,
     })
 
-    fmt.Printf("Partición montada con ID: %s\n", id)
-    fmt.Println("Particiones actualmente montadas:")
+    structs.Particiones_Montadas = particionesMontadas
+
+    var output strings.Builder
     for _, pm := range particionesMontadas {
         pmName := strings.TrimRight(string(pm.Partition.Part_name[:]), "\x00")
-        fmt.Printf(" - %s: %s (%s)\n", pm.Id, pmName, pm.Path)
+        output.WriteString(fmt.Sprintf(" - %s: %s (%s)\n", pm.Id, pmName, pm.Path))
     }
+
+    return output.String()
 }

@@ -1,216 +1,373 @@
 package commands
 
 import (
-    "backend/structs"
-    "encoding/binary"
-    "fmt"
-    "os"
-    "strconv"
-    "strings"
+	"backend/structs"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 )
 
-func Fdisk(params map[string]string) {
-    path, existPath := params["-path"]
-    name, existName := params["-name"]
-    sizeStr, existSize := params["-size"]
+func Fdisk(params map[string]string) string {
+	path, okPath := params["-path"]
+	name, okName := params["-name"]
+	sizeStr, okSize := params["-size"]
+	if !okPath || !okName || !okSize {
+		return "Error: parámetros obligatorios faltantes (-path, -name, -size)"
+	}
 
-    if !existPath || !existName || !existSize {
-        fmt.Println("Error: parámetros obligatorios faltantes")
-        return
-    }
+	var err error
+	path, err = limpiarRuta(path)
+	if err != nil {
+		return fmt.Sprintf("Error en la ruta: %v", err)
+	}
 
-    size, err := strconv.ParseInt(sizeStr, 10, 32)
-    if err != nil || size <= 0 {
-        fmt.Println("Error: -size debe ser un entero positivo")
-        return
-    }
+	unit := "K"
+	if v, ok := params["-unit"]; ok {
+		unit = strings.ToUpper(v)
+		if unit != "B" && unit != "K" && unit != "M" {
+			return "Error: unidad inválida (use B, K o M)"
+		}
+	}
 
-    unit := "K"
-    if u, existe := params["-unit"]; existe {
-        unit = strings.ToUpper(u)
-    }
+	ptype := "P"
+	if v, ok := params["-type"]; ok {
+		ptype = strings.ToUpper(v)
+		if ptype != "P" && ptype != "E" && ptype != "L" {
+			return "Error: type inválido (use P, E o L)"
+		}
+	}
 
-    tamanioBytes := size
-    switch unit {
-    case "K":
-        tamanioBytes *= 1024
-    case "M":
-        tamanioBytes *= 1024 * 1024
-    case "B":
-    default:
-        fmt.Println("Error: unidad inválida (use B, K o M)")
-        return
-    }
+	fit := "WF"
+	if v, ok := params["-fit"]; ok {
+		fit = strings.ToUpper(v)
+		if fit != "FF" && fit != "BF" && fit != "WF" {
+			return "Error: fit inválido (use FF, BF o WF)"
+		}
+	}
 
-    partType := byte('P')
-    if t, existe := params["-type"]; existe {
-        switch strings.ToUpper(t) {
-        case "P":
-            partType = 'P'
-        case "E":
-            partType = 'E'
-        case "L":
-            partType = 'L'
-        default:
-            fmt.Println("Error: type inválido (P, E, L)")
-            return
-        }
-    }
+	sizeVal, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil || sizeVal <= 0 {
+		return "Error: -size debe ser un entero positivo"
+	}
+	var reqBytes int64
+	switch unit {
+	case "B":
+		reqBytes = sizeVal
+	case "K":
+		reqBytes = sizeVal * 1024
+	case "M":
+		reqBytes = sizeVal * 1024 * 1024
+	}
 
-    if partType == 'E' {
-        file, err := os.OpenFile(path, os.O_RDONLY, 0644)
-        if err != nil {
-            fmt.Println("Error abriendo disco:", err)
-            return
-        }
-        defer file.Close()
+	file, err := os.OpenFile(path, os.O_RDWR, 0666)
+	if err != nil {
+		return fmt.Sprintf("Error abriendo disco: %v", err)
+	}
+	defer file.Close()
 
-        mbr, err := structs.LeerMBR(file)
-        if err != nil {
-            fmt.Println("Error leyendo MBR:", err)
-            return
-        }
+	mbr, err := structs.LeerMBR(file)
+	if err != nil {
+		return fmt.Sprintf("Error leyendo MBR: %v", err)
+	}
 
-        for _, p := range mbr.Mbr_partitions {
-            if p.Part_type == 'E' && p.Part_status == 1 {
-                fmt.Println("Error: solo puede haber una partición extendida por disco")
-                return
-            }
-        }
-    }
+	if nombreDuplicado(file, &mbr, name) {
+		return "Error: el nombre de partición ya existe en el disco"
+	}
 
-    fit := byte('W')
-    if a, existe := params["-fit"]; existe {
-        switch strings.ToUpper(a) {
-        case "BF":
-            fit = 'B'
-        case "FF":
-            fit = 'F'
-        case "WF":
-            fit = 'W'
-        default:
-            fmt.Println("Error: fit inválido (BF, FF, WF)")
-            return
-        }
-    }
+	if ptype == "L" {
+		extIdx := indiceExtendida(&mbr)
+		if extIdx == -1 {
+			return "Error: no existe partición extendida para crear una lógica"
+		}
+		return crearLogica(file, &mbr.Mbr_partitions[extIdx], name, reqBytes, fit)
+	}
 
-    file, err := os.OpenFile(path, os.O_RDWR, 0644)
-    if err != nil {
-        fmt.Println("Error abriendo disco:", err)
-        return
-    }
-    defer file.Close()
+	if ptype == "E" && existeExtendida(&mbr) {
+		return "Error: ya existe una partición extendida en el disco"
+	}
 
-    mbr, err := structs.LeerMBR(file)
-    if err != nil {
-        fmt.Println("Error leyendo MBR:", err)
-        return
-    }
+	slot := primerSlotLibre(&mbr)
+	if slot == -1 {
+		return "Error: límite de 4 particiones primarias/extendidas alcanzado"
+	}
 
-    inicio := int32(binary.Size(mbr))
-    var mejorInicio int32 = -1
-    var mejorTamanio int32 = 1<<31 - 1
-    var peorInicio int32 = -1
-    var peorTamanio int32 = -1
-    var espacioFinal int32
+	start, err := ubicarPrimariaExtendida(&mbr, reqBytes, fit)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
 
-    for i := 0; i < 4; i++ {
-        part := mbr.Mbr_partitions[i]
-        if part.Part_status == 1 {
-            espacioLibre := part.Part_start - inicio
+	var fitCh byte
+	switch fit {
+	case "FF":
+		fitCh = 'F'
+	case "BF":
+		fitCh = 'B'
+	case "WF":
+		fitCh = 'W'
+	}
 
-            if espacioLibre >= int32(tamanioBytes) {
-                switch fit {
-                case 'F':
-                    goto ENCONTRADO
-                case 'B':
-                    if espacioLibre < mejorTamanio {
-                        mejorTamanio = espacioLibre
-                        mejorInicio = inicio
-                    }
-                case 'W':
-                    if espacioLibre > peorTamanio {
-                        peorTamanio = espacioLibre
-                        peorInicio = inicio
-                    }
-                }
-            }
-            inicio = part.Part_start + part.Part_s
-        }
-    }
+	mbr.Mbr_partitions[slot].Part_status = 1
+	mbr.Mbr_partitions[slot].Part_type = ptype[0]
+	mbr.Mbr_partitions[slot].Part_fit = fitCh
+	mbr.Mbr_partitions[slot].Part_start = int32(start)
+	mbr.Mbr_partitions[slot].Part_s = int32(reqBytes)
+	mbr.Mbr_partitions[slot].Part_correlative = -1
+	if len(name) > len(mbr.Mbr_partitions[slot].Part_name) {
+		copy(mbr.Mbr_partitions[slot].Part_name[:], name[:len(mbr.Mbr_partitions[slot].Part_name)])
+	} else {
+		copy(mbr.Mbr_partitions[slot].Part_name[:], name)
+	}
 
-    espacioFinal = mbr.Mbr_tamano - inicio
-    if espacioFinal >= int32(tamanioBytes) {
-        switch fit {
-        case 'F':
-        case 'B':
-            if espacioFinal < mejorTamanio {
-                mejorInicio = inicio
-            }
-        case 'W':
-            if espacioFinal > peorTamanio {
-                peorInicio = inicio
-            }
-        }
-    }
+	if err := escribirMBR(file, &mbr); err != nil {
+		return fmt.Sprintf("Error escribiendo MBR: %v", err)
+	}
 
-    switch fit {
-    case 'F':
-    case 'B':
-        if mejorInicio != -1 {
-            inicio = mejorInicio
-        } else {
-            fmt.Println("Error: no hay espacio (Best Fit)")
-            return
-        }
-    case 'W':
-        if peorInicio != -1 {
-            inicio = peorInicio
-        } else {
-            fmt.Println("Error: no hay espacio (Worst Fit)")
-            return
-        }
-    }
+	if ptype == "E" {
+		var ebr structs.EBR
+		ebr.Part_next = -1
+		if _, err := file.Seek(int64(mbr.Mbr_partitions[slot].Part_start), 0); err != nil {
+			return fmt.Sprintf("Error posicionando EBR: %v", err)
+		}
+		if err := binary.Write(file, binary.LittleEndian, &ebr); err != nil {
+			return fmt.Sprintf("Error inicializando EBR: %v", err)
+		}
+	}
 
-ENCONTRADO:
-    nuevaParticion := structs.Partition{
-        Part_status: 1,
-        Part_type: partType,
-        Part_fit: fit,
-        Part_start: inicio,
-        Part_s: int32(tamanioBytes),
-        Part_correlative: -1,
-    }
+	return fmt.Sprintf("Partición creada: %s", name)
+}
 
-    copy(nuevaParticion.Part_name[:], []byte(name))
-    if len(name) > 16 {
-        copy(nuevaParticion.Part_name[:], []byte(name[:16]))
-    }
+func escribirMBR(file *os.File, mbr *structs.MBR) error {
+	if _, err := file.Seek(0, 0); err != nil {
+		return err
+	}
+	return binary.Write(file, binary.LittleEndian, mbr)
+}
 
-    agregado := false
-    for i := 0; i < 4; i++ {
-        if mbr.Mbr_partitions[i].Part_status == 0 {
-            mbr.Mbr_partitions[i] = nuevaParticion
-            agregado = true
-            break
-        }
-    }
+func primerSlotLibre(mbr *structs.MBR) int {
+	for i := 0; i < 4; i++ {
+		if mbr.Mbr_partitions[i].Part_status == 0 {
+			return i
+		}
+	}
+	return -1
+}
 
-    if !agregado {
-        fmt.Println("Error: máximo 4 particiones alcanzado")
-        return
-    }
+func existeExtendida(mbr *structs.MBR) bool {
+	for i := 0; i < 4; i++ {
+		if mbr.Mbr_partitions[i].Part_status == 1 && mbr.Mbr_partitions[i].Part_type == 'E' {
+			return true
+		}
+	}
+	return false
+}
 
-    file.Seek(0, 0)
-    if err := binary.Write(file, binary.LittleEndian, &mbr); err != nil {
-        fmt.Println("Error escribiendo MBR:", err)
-        return
-    }
+func indiceExtendida(mbr *structs.MBR) int {
+	for i := 0; i < 4; i++ {
+		if mbr.Mbr_partitions[i].Part_status == 1 && mbr.Mbr_partitions[i].Part_type == 'E' {
+			return i
+		}
+	}
+	return -1
+}
 
-    fmt.Printf("Partición creada: %s @ %d-%d (%d bytes)\n",
-        name,
-        inicio,
-        inicio+ int32(tamanioBytes),
-        tamanioBytes,
-    )
+func nombreDuplicado(file *os.File, mbr *structs.MBR, name string) bool {
+	for i := 0; i < 4; i++ {
+		p := mbr.Mbr_partitions[i]
+		if p.Part_status == 1 && bytesToString(p.Part_name[:]) == name {
+			return true
+		}
+		if p.Part_status == 1 && p.Part_type == 'E' {
+			if nombreDuplicadoLogicas(file, int64(p.Part_start), name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func nombreDuplicadoLogicas(file *os.File, extStart int64, name string) bool {
+	var ebr structs.EBR
+	pos := extStart
+	if _, err := file.Seek(pos, 0); err != nil {
+		return false
+	}
+	if err := binary.Read(file, binary.LittleEndian, &ebr); err != nil {
+		return false
+	}
+	if ebr.Part_mount == 0 && ebr.Part_next == 0 {
+		return false
+	}
+	for {
+		if ebr.Part_mount == 1 {
+			if bytesToString(ebr.Part_name[:]) == name {
+				return true
+			}
+		}
+		if ebr.Part_next == -1 {
+			break
+		}
+		pos = int64(ebr.Part_next)
+		if _, err := file.Seek(pos, 0); err != nil {
+			break
+		}
+		if err := binary.Read(file, binary.LittleEndian, &ebr); err != nil {
+			break
+		}
+	}
+	return false
+}
+
+func ubicarPrimariaExtendida(mbr *structs.MBR, req int64, fit string) (int64, error) {
+	type seg struct{ start, size int64 }
+	var ocupadas []seg
+	for i := 0; i < 4; i++ {
+		p := mbr.Mbr_partitions[i]
+		if p.Part_status == 1 {
+			ocupadas = append(ocupadas, seg{int64(p.Part_start), int64(p.Part_s)})
+		}
+	}
+	sort.Slice(ocupadas, func(i, j int) bool { return ocupadas[i].start < ocupadas[j].start })
+	header := int64(binary.Size(*mbr))
+	var gaps []seg
+	cur := header
+	for _, s := range ocupadas {
+		if s.start > cur {
+			gaps = append(gaps, seg{cur, s.start - cur})
+		}
+		cur = s.start + s.size
+	}
+	if int64(mbr.Mbr_tamano) > cur {
+		gaps = append(gaps, seg{cur, int64(mbr.Mbr_tamano) - cur})
+	}
+	if len(gaps) == 0 {
+		return 0, fmt.Errorf("no hay espacio disponible")
+	}
+	switch fit {
+	case "FF":
+		for _, g := range gaps {
+			if g.size >= req {
+				return g.start, nil
+			}
+		}
+	case "BF":
+		bestIdx := -1
+		for i, g := range gaps {
+			if g.size >= req {
+				if bestIdx == -1 || g.size < gaps[bestIdx].size {
+					bestIdx = i
+				}
+			}
+		}
+		if bestIdx != -1 {
+			return gaps[bestIdx].start, nil
+		}
+	case "WF":
+		worstIdx := -1
+		for i, g := range gaps {
+			if g.size >= req {
+				if worstIdx == -1 || g.size > gaps[worstIdx].size {
+					worstIdx = i
+				}
+			}
+		}
+		if worstIdx != -1 {
+			return gaps[worstIdx].start, nil
+		}
+	}
+	return 0, fmt.Errorf("no hay un segmento libre con tamaño suficiente")
+}
+
+func crearLogica(file *os.File, ext *structs.Partition, name string, reqBytes int64, fit string) string {
+	var ebr structs.EBR
+	ebrSize := int64(binary.Size(ebr))
+	extStart := int64(ext.Part_start)
+	extEnd := extStart + int64(ext.Part_s)
+
+	if _, err := file.Seek(extStart, 0); err != nil {
+		return fmt.Sprintf("Error posicionando EBR: %v", err)
+	}
+	if err := binary.Read(file, binary.LittleEndian, &ebr); err != nil {
+		return fmt.Sprintf("Error leyendo EBR: %v", err)
+	}
+
+	if ebr.Part_mount == 0 && ebr.Part_next == 0 {
+		if extStart+ebrSize+reqBytes > extEnd {
+			return "Error: no hay espacio en la partición extendida"
+		}
+		ebr.Part_mount = 1
+		ebr.Part_fit = fit[0]
+		ebr.Part_start = int32(extStart + ebrSize)
+		ebr.Part_s = int32(reqBytes)
+		ebr.Part_next = -1
+		if len(name) > len(ebr.Part_name) {
+			copy(ebr.Part_name[:], name[:len(ebr.Part_name)])
+		} else {
+			copy(ebr.Part_name[:], name)
+		}
+		if _, err := file.Seek(extStart, 0); err != nil {
+			return fmt.Sprintf("Error posicionando EBR: %v", err)
+		}
+		if err := binary.Write(file, binary.LittleEndian, &ebr); err != nil {
+			return fmt.Sprintf("Error escribiendo EBR: %v", err)
+		}
+		return fmt.Sprintf("Partición lógica creada: %s", name)
+	}
+
+	var pos int64 = extStart
+	for {
+		if ebr.Part_next == -1 {
+			lastHeader := pos
+			lastDataEnd := int64(ebr.Part_start) + int64(ebr.Part_s)
+			newHeader := lastDataEnd
+			if newHeader+ebrSize+reqBytes > extEnd {
+				return "Error: no hay espacio en la partición extendida"
+			}
+			ebr.Part_next = int32(newHeader)
+			if _, err := file.Seek(lastHeader, 0); err != nil {
+				return fmt.Sprintf("Error posicionando EBR previo: %v", err)
+			}
+			if err := binary.Write(file, binary.LittleEndian, &ebr); err != nil {
+				return fmt.Sprintf("Error actualizando EBR previo: %v", err)
+			}
+			var newEBR structs.EBR
+			newEBR.Part_mount = 1
+			newEBR.Part_fit = fit[0]
+			newEBR.Part_start = int32(newHeader + ebrSize)
+			newEBR.Part_s = int32(reqBytes)
+			newEBR.Part_next = -1
+			if len(name) > len(newEBR.Part_name) {
+				copy(newEBR.Part_name[:], name[:len(newEBR.Part_name)])
+			} else {
+				copy(newEBR.Part_name[:], name)
+			}
+			if _, err := file.Seek(newHeader, 0); err != nil {
+				return fmt.Sprintf("Error posicionando nuevo EBR: %v", err)
+			}
+			if err := binary.Write(file, binary.LittleEndian, &newEBR); err != nil {
+				return fmt.Sprintf("Error escribiendo nuevo EBR: %v", err)
+			}
+			return fmt.Sprintf("Partición lógica creada: %s", name)
+		}
+		pos = int64(ebr.Part_next)
+		if _, err := file.Seek(pos, 0); err != nil {
+			return fmt.Sprintf("Error recorriendo EBR: %v", err)
+		}
+		if err := binary.Read(file, binary.LittleEndian, &ebr); err != nil {
+			return fmt.Sprintf("Error leyendo EBR: %v", err)
+		}
+	}
+}
+
+func bytesToString(b []byte) string {
+	n := 0
+	for i := range b {
+		if b[i] == 0 {
+			break
+		}
+		n++
+	}
+	return string(b[:n])
 }
