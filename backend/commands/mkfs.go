@@ -148,8 +148,8 @@ func Mkfs(params map[string]string) string {
         inoRoot.I_block[i] = -1
     }
     inoRoot.I_block[0] = 0
-    inoRoot.I_type[0] = '0'
-    inoRoot.I_perm = [3]byte{'7', '5', '5'}
+    inoRoot.I_type[0] = 0
+    inoRoot.I_perm = [3]byte{7, 5, 5}
 
     // Inodo users.txt (1)
     contenidoUsers := "1,G,root\n1,U,root,root,123\n"
@@ -169,8 +169,8 @@ func Mkfs(params map[string]string) string {
         inoUsers.I_block[i] = -1
     }
     inoUsers.I_block[0] = 1
-    inoUsers.I_type[0] = '1'
-    inoUsers.I_perm = [3]byte{'6', '6', '4'}
+    inoUsers.I_type[0] = 1
+    inoUsers.I_perm = [3]byte{6, 6, 4}
 
     if _, err := f.Seek(int64(sb.S_inode_start)+0*int64(sb.S_inode_s), 0); err != nil {
         return "Error al posicionar inodo raíz: " + err.Error()

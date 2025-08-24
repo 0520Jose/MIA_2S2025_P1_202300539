@@ -74,7 +74,7 @@ func Mkdir(params map[string]string) string {
         return "Error: ya existe un archivo con ese nombre."
     }
 
-    if _, err := createDirectoryWithPerm(disk, sb, padreIno, nombre, [3]byte{'6', '6', '4'}); err != nil {
+    if _, err := createDirectoryWithPerm(disk, sb, padreIno, nombre, [3]byte{6, 6, 4}); err != nil {
         return "Error: " + err.Error()
     }
 
@@ -107,7 +107,7 @@ func createDirectoryWithPerm(f *os.File, sb *structs.SuperBloque, parentIno int3
         ino.I_block[i] = -1
     }
     ino.I_block[0] = idxBlk
-    ino.I_type[0] = '0'
+    ino.I_type[0] = 0
     ino.I_perm = perm
     if err := writeInode(f, sb, idxIno, &ino); err != nil {
         return -1, err

@@ -1,81 +1,155 @@
-# Crear disco de 10 MB
-mkdisk -size=10 -unit=M -path="/home/emanuel/Disco1.mia"
+# Crear disco de 20 MB
+mkdisk -size=20 -unit=M -path="/home/emanuel/Disco3.mia"
 
-# Crear partición primaria de 1 MB
-fdisk -size=1024 -unit=K -type=P -path="/home/emanuel/Disco1.mia" -name=Part1
+# Crear primera partición primaria de 3 MB
+fdisk -size=3 -unit=M -type=P -path="/home/emanuel/Disco3.mia" -name=Primaria1
 
-# Montar partición
-mount -path="/home/emanuel/Disco1.mia" -name=Part1
+# Crear segunda partición primaria de 2 MB
+fdisk -size=2 -unit=M -type=P -path="/home/emanuel/Disco3.mia" -name=Primaria2
 
-# Formatear partición
+# Crear partición extendida de 8 MB
+fdisk -size=8 -unit=M -type=E -path="/home/emanuel/Disco3.mia" -name=Extendida1
+
+# Crear primera partición lógica dentro de la extendida (2 MB)
+fdisk -size=2 -unit=M -type=L -path="/home/emanuel/Disco3.mia" -name=Logica1
+
+# Crear segunda partición lógica dentro de la extendida (3 MB)
+fdisk -size=3 -unit=M -type=L -path="/home/emanuel/Disco3.mia" -name=Logica2
+
+# Crear tercera partición lógica dentro de la extendida (1 MB)
+fdisk -size=1 -unit=M -type=L -path="/home/emanuel/Disco3.mia" -name=Logica3
+
+# Montar una partición para probar el resto del sistema
+mount -path="/home/emanuel/Disco3.mia" -name=Primaria1
+
+# Formatear partición montada (usa el ID que te devuelva mount)
 mkfs -id=391A
 
-# Iniciar sesión con root
+# Iniciar sesión
 login -user=root -pass=123 -id=391A
 
-# Ver contenido inicial de users.txt
-cat -file=/users.txt
+########################
+#   MANEJO DE USUARIOS  #
+########################
 
-# Crear grupo y verificar
-mkgrp -name=usuarios
-cat -file=/users.txt
+# Crear grupo de desarrolladores (máximo 10 caracteres)
+mkgrp -name=devs -id=391A
 
-# Crear usuario en el grupo
-mkusr -user=user1 -pass=usuario -grp=usuarios
-cat -file=/users.txt
+# Crear grupo de testers
+mkgrp -name=testers -id=391A
 
-# Cambiar grupo del usuario
-chgrp -user=user1 -grp=root
-cat -file=/users.txt
+# Crear usuario administrador (máximo 10 caracteres)
+mkusr -user=admin -pass=admin123 -grp=devs -id=391A
 
-# Eliminar usuario
-rmusr -user=user1
-cat -file=/users.txt
+# Crear usuario programador (máximo 10 caracteres)
+mkusr -user=prog -pass=prog123 -grp=devs -id=391A
 
-# Eliminar grupo
-rmgrp -name=usuarios
-cat -file=/users.txt
+# Crear usuario tester
+mkusr -user=tester -pass=test123 -grp=testers -id=391A
 
-# Crear carpetas y archivos
-mkdir -p -path=/home/user/docs/usac
-mkfile -size=15 -path=/home/user/docs/a.txt -r
-mkdir -p -path=/home/mis_docs
-mkfile -path=/home/mis_docs/arch1.txt
+########################
+#   CREACIÓN DE ARCHIVOS Y CARPETAS  #
+########################
 
-# Concatenar archivos
-cat -file1=/home/user/docs/a.txt -file2=/home/mis_docs/arch1.txt
+# Crear carpeta raíz del proyecto
+mkdir -path="/proyecto" -id=391A
+
+# Crear estructura de carpetas
+mkdir -path="/proyecto/src" -id=391A
+mkdir -path="/proyecto/docs" -id=391A
+mkdir -path="/proyecto/tests" -id=391A
+mkdir -path="/proyecto/config" -id=391A
+mkdir -path="/proyecto/src/comp" -id=391A
+mkdir -path="/proyecto/src/utils" -id=391A
+mkdir -path="/proyecto/docs/manual" -id=391A
+mkdir -path="/proyecto/tests/unit" -id=391A
+mkdir -path="/proyecto/tests/integ" -id=391A
+
+# Crear archivos de configuración (máximo 12 caracteres para nombres)
+mkfile -path="/proyecto/config/config.json" -size=100 -id=391A
+mkfile -path="/proyecto/config/db.conf" -size=50 -id=391A
+mkfile -path="/proyecto/README.md" -size=200 -id=391A
+
+# Crear archivos de código fuente
+mkfile -path="/proyecto/src/main.go" -size=500 -id=391A
+mkfile -path="/proyecto/src/comp/auth.go" -size=300 -id=391A
+mkfile -path="/proyecto/src/comp/db.go" -size=400 -id=391A
+mkfile -path="/proyecto/src/utils/helper.go" -size=150 -id=391A
+mkfile -path="/proyecto/src/utils/valid.go" -size=200 -id=391A
+
+# Crear archivos de documentación
+mkfile -path="/proyecto/docs/manual/install.txt" -size=250 -id=391A
+mkfile -path="/proyecto/docs/manual/uso.txt" -size=300 -id=391A
+mkfile -path="/proyecto/docs/api.md" -size=400 -id=391A
+
+# Crear archivos de pruebas
+mkfile -path="/proyecto/tests/unit/auth_test.go" -size=200 -id=391A
+mkfile -path="/proyecto/tests/unit/db_test.go" -size=180 -id=391A
+mkfile -path="/proyecto/tests/integ/full_test.go" -size=350 -id=391A
+
+# Crear algunos archivos de datos
+mkdir -path="/data" -id=391A
+mkdir -path="/data/logs" -id=391A
+mkdir -path="/data/backup" -id=391A
+mkfile -path="/data/app.log" -size=800 -id=391A
+mkfile -path="/data/error.log" -size=400 -id=391A
+mkfile -path="/data/backup/backup.sql" -size=1500 -id=391A
+
+# Crear carpeta personal de usuario
+mkdir -path="/home" -id=391A
+mkdir -path="/home/admin" -id=391A
+mkdir -path="/home/admin/docs" -id=391A
+mkdir -path="/home/admin/down" -id=391A
+mkfile -path="/home/admin/perfil.txt" -size=100 -id=391A
+mkfile -path="/home/admin/docs/notas.txt" -size=250 -id=391A
+
+########################
+#   VER CONTENIDO DE ARCHIVOS  #
+########################
+
+# Ver contenido del README (corregir parámetro)
+cat -file="/proyecto/README.md" -id=391A
+
+# Ver contenido de archivos de configuración
+cat -file="/proyecto/config/config.json" -id=391A
+cat -file="/proyecto/config/db.conf" -id=391A
+
+# Ver contenido de archivos de código
+cat -file="/proyecto/src/main.go" -id=391A
+cat -file="/proyecto/src/comp/auth.go" -id=391A
+
+# Ver logs
+cat -file="/data/app.log" -id=391A
+cat -file="/data/error.log" -id=391A
+
+# Ver archivos de usuario
+cat -file="/home/admin/perfil.txt" -id=391A
+cat -file="/home/admin/docs/notas.txt" -id=391A
 
 # Cerrar sesión
 logout
-
 
 ########################
 #   REPORTES GRAPHVIZ  #
 ########################
 
-# Reporte del MBR
-rep -id=391A -path="/home/emanuel/reportes/mbr.png" -name=mbr
+# Reporte del MBR - aquí deberías ver los 3 tipos de particiones
+rep -id=391A -path="/home/emanuel/reportes3/mbr_completo.png" -name=mbr
 
 # Reporte del disco
-rep -id=391A -path="/home/emanuel/reportes/disk.png" -name=disk
+rep -id=391A -path="/home/emanuel/reportes3/disk_completo.png" -name=disk
 
-# Reporte del superbloque
-rep -id=391A -path="/home/emanuel/reportes/sb.png" -name=sb
+# Reporte del inodo
+rep -id=391A -path="/home/emanuel/reportes3/inodo_completo.png" -name=inode
 
-# Reporte de inodos
-rep -id=391A -path="/home/emanuel/reportes/inodes.png" -name=inode
+# Reporte del block
+rep -id=391A -path="/home/emanuel/reportes3/block_completo.png" -name=block
 
-# Reporte de bloques
-rep -id=391A -path="/home/emanuel/reportes/blocks.png" -name=block
+# Generar bitmap de inodos
+rep -id=391A -path="/home/emanuel/reportes3/bm_inode.txt" -name=bm_inode
 
-# Reporte de bitmap de inodos
-rep -id=391A -path="/home/emanuel/reportes/bm_inode.png" -name=bm_inode
+# Generar bitmap de bloques
+rep -id=391A -path="/home/emanuel/reportes3/bm_block.txt" -name=bm_block
 
-# Reporte de bitmap de bloques
-rep -id=391A -path="/home/emanuel/reportes/bm_block.png" -name=bm_block
-
-# Reporte del archivo users.txt
-rep -id=391A -path="/home/emanuel/reportes/users.png" -name=file -path_file_ls=/users.txt
-
-# Reporte de un directorio
-rep -id=391A -path="/home/emanuel/reportes/ls_docs.png" -name=ls -path_file_ls=/home/user/docs
+# Reporte del árbol de archivos
+rep -id=391A -path="/home/emanuel/reportes3/tree_completo.png" -name=tree

@@ -144,8 +144,8 @@ func Mkfile(params map[string]string) string {
     for i := 0; i < len(usadoBlocks) && i < len(ino.I_block); i++ {
         ino.I_block[i] = usadoBlocks[i]
     }
-    ino.I_type[0] = '1'
-    ino.I_perm = [3]byte{'6', '6', '4'}
+    ino.I_type[0] = 1
+    ino.I_perm = [3]byte{6, 6, 4}
 
     if err := writeInode(disk, sb, inodeIdx, &ino); err != nil {
         return "Error al escribir inodo de archivo: " + err.Error()
@@ -190,7 +190,7 @@ func ensureParentDir(f *os.File, sb *structs.SuperBloque, parts []string, recurs
             if err != nil {
                 return -1, err
             }
-            if ino.I_type[0] != '0' {
+            if ino.I_type[0] != 0 {
                 return -1, fmt.Errorf("ya existe un archivo con el nombre '%s'", name)
             }
             curr = int32(idx)
@@ -263,8 +263,8 @@ func createDirectory(f *os.File, sb *structs.SuperBloque, parentIno int32, name 
         ino.I_block[i] = -1
     }
     ino.I_block[0] = idxBlk
-    ino.I_type[0] = '0'
-    ino.I_perm = [3]byte{'7', '5', '5'}
+    ino.I_type[0] = 0
+    ino.I_perm = [3]byte{7, 5, 5}
     if err := writeInode(f, sb, idxIno, &ino); err != nil {
         return -1, err
     }

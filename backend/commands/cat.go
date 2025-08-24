@@ -147,7 +147,7 @@ func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, e
             return -1, fmt.Errorf("leer inodo %d: %v", curr, err)
         }
         if i < lastIdx {
-            if ino.I_type[0] != '0' {
+            if ino.I_type[0] != 0 {
                 return -1, fmt.Errorf("no es un directorio")
             }
             if !hasPerm(&ino, permExec) {
@@ -190,7 +190,7 @@ func readFileContent(f *os.File, sb *structs.SuperBloque, inoIdx int32) (string,
     if err != nil {
         return "", err
     }
-    if ino.I_type[0] != '1' {
+    if ino.I_type[0] != 1 {
         return "", fmt.Errorf("no es un archivo")
     }
     if !hasPerm(&ino, permRead) {

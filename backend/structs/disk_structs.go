@@ -363,47 +363,160 @@ func resolvePath(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
     return currIdx, curr, true
 }
 
-func GenerateTreeGraph(f *os.File, sb *SuperBloque) string {
+func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
     var b strings.Builder
     b.WriteString("digraph G {\n")
-    b.WriteString("  node [shape=folder, fontname=\"Helvetica\"];\n")
-
+    b.WriteString("  node [shape=plaintext, fontname=\"Arial\"];\n")
+    b.WriteString("  rankdir=TB;\n")
+    
     visited := map[int]bool{}
-    var dfs func(idx int, name string)
-
-    dfs = func(idx int, name string) {
+    visitedBlocks := map[int]bool{}
+    
+    var dfs func(idx int)
+    
+    dfs = func(idx int) {
         if visited[idx] {
             return
         }
         visited[idx] = true
+        
         ino, ok := GetInode(f, sb, idx)
         if !ok {
             return
         }
-
-        label := name
-        if label == "" {
-            label = "/"
+        
+        // Tabla inodo con encabezado mostrando número y tipo
+        b.WriteString(fmt.Sprintf("  inode%d [label=<\n", idx))
+        b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightblue'>\n")
+        b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>INODO %d</b></td></tr>\n", idx))
+        b.WriteString(fmt.Sprintf("      <tr><td>i_type</td><td>%d</td></tr>\n", ino.I_type[0]))
+        if 0 < 15 {
+            b.WriteString(fmt.Sprintf("      <tr><td>ap0 (directo)</td><td>%d</td></tr>\n", ino.I_block[0]))
         }
-        shape := "folder"
-        if isFile(ino) {
-            shape = "note"
+        if 12 < 15 {
+            b.WriteString(fmt.Sprintf("      <tr><td>ap1 (indirecto)</td><td>%d</td></tr>\n", ino.I_block[12]))
         }
-        b.WriteString(fmt.Sprintf("  n%d [label=\"%s\", shape=%s];\n", idx, label, shape))
-
+        if 13 < 15 {
+            b.WriteString(fmt.Sprintf("      <tr><td>ap2 (doble indirecto)</td><td>%d</td></tr>\n", ino.I_block[13]))
+        }
+        b.WriteString(fmt.Sprintf("      <tr><td>i_perm</td><td>%d</td></tr>\n", ino.I_perm))
+        b.WriteString("    </table>\n")
+        b.WriteString("  >];\n")
+        
         if isDir(ino) {
-            ents := listDir(f, sb, ino)
-            for childName, childIdx := range ents {
-                b.WriteString(fmt.Sprintf("  n%d -> n%d;\n", idx, childIdx))
-                dfs(int(childIdx), childName)
+            for i := 0; i < 12; i++ {
+                blockIdx := ino.I_block[i]
+                if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
+                    generateDirectoryBlock(f, sb, &b, int(blockIdx), idx)
+                    visitedBlocks[int(blockIdx)] = true
+                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                    
+                    bc, ok := readBlockAsCarpeta(f, sb, blockIdx)
+                    if ok {
+                        for _, content := range bc.B_content {
+                            name := trimBytes(content.B_name[:])
+                            childIdx := content.B_inodo
+                            if name != "" && name != "." && name != ".." && childIdx >= 0 {
+                                b.WriteString(fmt.Sprintf("  block%d -> inode%d;\n", blockIdx, childIdx))
+                                dfs(int(childIdx))
+                            }
+                        }
+                    }
+                }
+            }
+        } else if isFile(ino) {
+            for i := 0; i < 12; i++ {
+                blockIdx := ino.I_block[i]
+                if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
+                    generateFileBlock(f, sb, &b, int(blockIdx), idx, s)
+                    visitedBlocks[int(blockIdx)] = true
+                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                }
+            }
+            // Bloques de apuntadores: mostrar solo 2
+            for i := 12; i < 15; i++ {
+                blockIdx := ino.I_block[i]
+                if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
+                    generatePointerBlock(f, sb, &b, int(blockIdx), idx)
+                    visitedBlocks[int(blockIdx)] = true
+                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                }
             }
         }
     }
-
-    dfs(0, "/")
+    
+    dfs(0)
     b.WriteString("}\n")
     return b.String()
 }
+
+func generateFileBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int, s int) {
+    ba, ok := readBlockAsArchivo(f, sb, int32(blockIdx))
+    if !ok {
+        return
+    }
+    content := trimBytes(ba.B_content[:])
+    if len(content) > 3 {
+        content = content[:3]
+    }
+
+    b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='yellow'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td><b>b. archivo %d</b></td></tr>\n", blockIdx))
+    b.WriteString(fmt.Sprintf("      <tr><td>%s</td></tr>\n", content))
+    b.WriteString("    </table>\n")
+    b.WriteString("  >];\n")
+}
+
+func generatePointerBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
+    block, ok := GetBlock(f, sb, blockIdx)
+    if !ok {
+        return
+    }
+
+    var pointers BApuntadores
+    rdr := bytes.NewReader(block.Data[:])
+    if err := binary.Read(rdr, binary.LittleEndian, &pointers); err != nil {
+        return
+    }
+
+    b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightgreen'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. apuntadores %d</b></td></tr>\n", blockIdx))
+
+    for i := 0; i < 2 && i < len(pointers.B_pointers); i++ {
+        ptr := pointers.B_pointers[i]
+        b.WriteString(fmt.Sprintf("      <tr><td>ap_%d</td><td>%d</td></tr>\n", i, ptr))
+    }
+
+    b.WriteString("    </table>\n")
+    b.WriteString("  >];\n")
+}
+
+func generateDirectoryBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
+    bc, ok := readBlockAsCarpeta(f, sb, int32(blockIdx))
+    if !ok {
+        return
+    }
+    
+    b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='salmon'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. carpeta %d</b></td></tr>\n", blockIdx))
+    b.WriteString("      <tr><td><b>b_name</b></td><td><b>b_inodo</b></td></tr>\n")
+    
+    for _, content := range bc.B_content {
+        name := trimBytes(content.B_name[:])
+        if name != "" {
+            b.WriteString(fmt.Sprintf("      <tr><td>%s</td><td>%d</td></tr>\n", name, content.B_inodo))
+        } else {
+            b.WriteString("      <tr><td></td><td></td></tr>\n")
+        }
+    }
+    
+    b.WriteString("    </table>\n")
+    b.WriteString("  >];\n")
+}
+
 
 func ReadFileFromFS(id, path string) (string, error) {
     f, sb, _, err := GetFileSystemByID(id)
