@@ -1,11 +1,12 @@
 package commands
 
 import (
-    "strings"
     "backend/structs"
-    "os"
-    "fmt"
     "encoding/binary"
+    "fmt"
+    "os"
+    "strconv"
+    "strings"
 )
 
 var currentUser *UserSession
@@ -14,296 +15,216 @@ type UserSession struct {
     Username    string
     PartitionID string
     Group       string
+    UID         int
+    GID         int
 }
 
-func Login(args map[string]string) string {
+func Login(params map[string]string) string {
     if currentUser != nil {
-        return "Error: ya hay un usuario logueado. Debe hacer logout primero."
+        return "Error: ya hay un usuario logueado"
     }
 
-    user, okUser := args["-user"]
-    pass, okPass := args["-pass"]
-    id, okID := args["-id"]
-
-    if !okUser || !okPass || !okID {
-        return "Error: parámetros faltantes. Uso: login -user= -pass= -id="
+    allowed := map[string]struct{}{
+        "-user": {}, "-usr": {}, "-pass": {}, "-pwd": {}, "-id": {},
+    }
+    normalized := make(map[string]string, len(params))
+    for k, v := range params {
+        lk := strings.ToLower(strings.TrimSpace(k))
+        if _, ok := allowed[lk]; !ok {
+            return fmt.Sprintf("Error: parámetro no reconocido: %s", k)
+        }
+        normalized[lk] = v
     }
 
-    // Validaciones adicionales
-    if strings.TrimSpace(user) == "" {
-        return "Error: el nombre de usuario no puede estar vacío"
-    }
-    if strings.TrimSpace(pass) == "" {
-        return "Error: la contraseña no puede estar vacía"
-    }
-    if strings.TrimSpace(id) == "" {
-        return "Error: el ID de partición no puede estar vacío"
+    user := unquoteValue(firstNonEmpty(normalized["-user"], normalized["-usr"]))
+    pass := unquoteValue(firstNonEmpty(normalized["-pass"], normalized["-pwd"]))
+    id := unquoteValue(normalized["-id"])
+    if strings.TrimSpace(user) == "" || strings.TrimSpace(pass) == "" || strings.TrimSpace(id) == "" {
+        return "Error: parámetros -user/-usr, -pass/-pwd e -id son obligatorios"
     }
 
-    fmt.Printf("[DEBUG] Intentando login para usuario: %s en partición: %s\n", user, id)
-
-    contenido := LeerArchivoUsersTXT(id)
-    if strings.HasPrefix(contenido, "Error:") {
-        return contenido
+    var pm *structs.PartitionMount
+    for i := range structs.Particiones_Montadas {
+        if structs.Particiones_Montadas[i].Id == id {
+            pm = &structs.Particiones_Montadas[i]
+            break
+        }
+    }
+    if pm == nil {
+        return fmt.Sprintf("Error: partición con ID %s no está montada", id)
     }
 
-    if strings.TrimSpace(contenido) == "" {
-        return "Error: el archivo users.txt está vacío o corrupto"
+    f, err := os.Open(pm.Path)
+    if err != nil {
+        return fmt.Sprintf("Error al abrir el disco: %v", err)
+    }
+    defer f.Close()
+
+    sb, err := CargarSuperBloque(f, pm.Partition.Part_start)
+    if err != nil {
+        return fmt.Sprintf("Error al cargar el superbloque: %v", err)
     }
 
-    var usersTXT structs.UsersTXT
-    usersTXT.FromString(contenido)
-
-    usr := usersTXT.GetUsuario(user)
-    if usr == nil {
-        return fmt.Sprintf("Error: el usuario '%s' no existe.", user)
+    contenido, err := LeerArchivoUsersTXT(f, sb)
+    if err != nil {
+        return fmt.Sprintf("Error: no se pudo leer el archivo users.txt -> %v", err)
     }
-    
-    if usr.Contrasena != pass {
-        return "Error: autenticación fallida. Contraseña incorrecta."
+
+    lineas := strings.Split(strings.TrimSpace(contenido), "\n")
+
+    grupos := make(map[string]string)
+    for _, linea := range lineas {
+        linea = strings.TrimSpace(linea)
+        if linea == "" || strings.HasPrefix(linea, "#") {
+            continue
+        }
+        partes := strings.Split(linea, ",")
+        if len(partes) >= 3 && partes[1] == "G" {
+            grupos[partes[0]] = partes[2]
+        }
+    }
+
+    var uidInt, gidInt int
+    var grupoNombre string
+    encontrado := false
+
+    for _, linea := range lineas {
+        partes := strings.Split(strings.TrimSpace(linea), ",")
+        if len(partes) >= 5 && partes[1] == "U" {
+            uid := partes[0]
+            grupoID := partes[2]
+            nombreUsuario := partes[3]
+            password := partes[4]
+
+            if nombreUsuario == user && password == pass {
+                uidInt, _ = strconv.Atoi(uid)
+                gidInt, _ = strconv.Atoi(grupoID)
+                grupoNombre = grupos[grupoID]
+                if grupoNombre == "" {
+                    grupoNombre = "unknown"
+                }
+                encontrado = true
+                break
+            }
+        }
+    }
+
+    if !encontrado {
+        return "Error: usuario o contraseña incorrectos"
     }
 
     currentUser = &UserSession{
-        Username:    usr.Nombre,
+        Username:    user,
         PartitionID: id,
-        Group:       usr.Grupo,
+        Group:       grupoNombre,
+        UID:         uidInt,
+        GID:         gidInt,
     }
-
-    fmt.Printf("[INFO] Usuario %s logueado exitosamente en partición %s\n", usr.Nombre, id)
-    return fmt.Sprintf("Inicio de sesión exitoso como: %s (Grupo: %s)", usr.Nombre, usr.Grupo)
+    return "Login exitoso"
 }
 
 func Logout() string {
     if currentUser == nil {
-        return "Error: no hay ningún usuario logueado."
+        return "Error: no hay ningún usuario logueado"
     }
-    
-    username := currentUser.Username
-    fmt.Printf("[INFO] Logout para usuario: %s\n", username)
     currentUser = nil
-    return "Logout exitoso para el usuario: " + username
+    return "Logout exitoso"
 }
 
 func GetCurrentUser() *UserSession {
     return currentUser
 }
 
-func LeerArchivoUsersTXT(id string) string {
-    fmt.Printf("[DEBUG] Buscando partición montada con ID: %s\n", id)
-    
-    for _, pm := range structs.Particiones_Montadas {
-        if pm.Id == id {
-            fmt.Printf("[DEBUG] Partición encontrada: %s\n", pm.Path)
-            path := pm.Path
-            partition := pm.Partition
+func CargarSuperBloque(f *os.File, partStart int32) (*structs.SuperBloque, error) {
+    if _, err := f.Seek(int64(partStart), 0); err != nil {
+        return nil, fmt.Errorf("error al buscar superbloque: %v", err)
+    }
+    var sb structs.SuperBloque
+    if err := binary.Read(f, binary.LittleEndian, &sb); err != nil {
+        return nil, fmt.Errorf("error al leer superbloque: %v", err)
+    }
+    if sb.S_magic != 0xEF53 {
+        return nil, fmt.Errorf("sistema de archivos no válido (magic: 0x%X)", sb.S_magic)
+    }
+    return &sb, nil
+}
 
-            fs := CargarSistemaEXT2(path, partition)
-            if fs == nil {
-                return "Error: no se pudo cargar el sistema de archivos"
-            }
-            defer fs.File.Close()
+func LeerArchivoUsersTXT(f *os.File, sb *structs.SuperBloque) (string, error) {
+    if _, err := f.Seek(int64(sb.S_inode_start), 0); err != nil {
+        return "", fmt.Errorf("posicionar inodo raíz: %v", err)
+    }
+    var inoRoot structs.Inodo
+    if err := binary.Read(f, binary.LittleEndian, &inoRoot); err != nil {
+        return "", fmt.Errorf("leer inodo raíz: %v", err)
+    }
 
-            contenido, err := fs.LeerArchivoUsersTXT()
-            if err != nil {
-                return "Error: no se pudo leer el archivo users.txt -> " + err.Error()
-            }
+    if inoRoot.I_block[0] < 0 {
+        return "", fmt.Errorf("raíz sin bloque asignado")
+    }
+    if _, err := f.Seek(int64(sb.S_block_start)+int64(inoRoot.I_block[0])*int64(sb.S_block_s), 0); err != nil {
+        return "", fmt.Errorf("posicionar bloque raíz: %v", err)
+    }
+    var bdir structs.BCarpeta
+    if err := binary.Read(f, binary.LittleEndian, &bdir); err != nil {
+        return "", fmt.Errorf("leer bloque de carpeta raíz: %v", err)
+    }
 
-            fmt.Printf("[DEBUG] users.txt leído exitosamente (%d bytes)\n", len(contenido))
-            return contenido
+    usersIno := int32(-1)
+    for _, e := range bdir.B_content {
+        if e.B_inodo >= 0 && strings.TrimRight(string(e.B_name[:]), "\x00") == "users.txt" {
+            usersIno = e.B_inodo
+            break
         }
     }
-    return "Error: partición con id " + id + " no está montada"
-}
-
-func CargarSistemaEXT2(path string, partition structs.Partition) *EXT2FileSystem {
-    fmt.Printf("[DEBUG] Cargando sistema EXT2 desde: %s, start: %d\n", path, partition.Part_start)
-    
-    file, err := os.OpenFile(path, os.O_RDWR, 0666)
-    if err != nil {
-        fmt.Printf("[ERROR] Error al abrir el archivo de disco: %v\n", err)
-        return nil
+    if usersIno < 0 {
+        usersIno = 1
     }
 
-    fs := &EXT2FileSystem{
-        File:      file,
-        Path:      path,
-        Partition: partition,
+    if _, err := f.Seek(int64(sb.S_inode_start)+int64(usersIno)*int64(sb.S_inode_s), 0); err != nil {
+        return "", fmt.Errorf("posicionar inodo users.txt: %v", err)
+    }
+    var inoUsers structs.Inodo
+    if err := binary.Read(f, binary.LittleEndian, &inoUsers); err != nil {
+        return "", fmt.Errorf("leer inodo users.txt: %v", err)
+    }
+    if inoUsers.I_block[0] < 0 {
+        return "", fmt.Errorf("users.txt sin bloque de datos")
     }
 
-    err = fs.LoadSuperBlock()
-    if err != nil {
-        fmt.Printf("[ERROR] Error al cargar el superbloque: %v\n", err)
-        file.Close()
-        return nil
+    if _, err := f.Seek(int64(sb.S_block_start)+int64(inoUsers.I_block[0])*int64(sb.S_block_s), 0); err != nil {
+        return "", fmt.Errorf("posicionar bloque users.txt: %v", err)
+    }
+    var bfile structs.BArchivo
+    if err := binary.Read(f, binary.LittleEndian, &bfile); err != nil {
+        return "", fmt.Errorf("leer bloque users.txt: %v", err)
     }
 
-    fmt.Printf("[INFO] Sistema EXT2 cargado exitosamente (magic: 0x%X)\n", fs.SuperBlock.S_magic)
-    return fs
-}
-
-type EXT2FileSystem struct {
-    File       *os.File
-    Path       string
-    Partition  structs.Partition
-    SuperBlock structs.SuperBloque
-}
-
-func (fs *EXT2FileSystem) LoadSuperBlock() error {
-    fmt.Printf("[DEBUG] Cargando superbloque desde posición: %d\n", fs.Partition.Part_start)
-    
-    // Verificar que el archivo esté abierto correctamente
-    stat, err := fs.File.Stat()
-    if err != nil {
-        return fmt.Errorf("error al obtener información del archivo: %v", err)
-    }
-    fmt.Printf("[DEBUG] Tamaño del archivo: %d bytes\n", stat.Size())
-    
-    // Verificar que la posición esté dentro del archivo
-    if int64(fs.Partition.Part_start) >= stat.Size() {
-        return fmt.Errorf("posición del superbloque (%d) está fuera del archivo (tamaño: %d)", 
-            fs.Partition.Part_start, stat.Size())
-    }
-    
-    _, err = fs.File.Seek(int64(fs.Partition.Part_start), 0)
-    if err != nil {
-        return fmt.Errorf("error al posicionarse en superbloque: %v", err)
-    }
-    
-    // Verificar posición actual
-    currentPos, _ := fs.File.Seek(0, 1)
-    fmt.Printf("[DEBUG] Posición actual antes de leer: %d\n", currentPos)
-    
-    // Leer más bytes para debug
-    fs.File.Seek(int64(fs.Partition.Part_start), 0)
-    debugBytes := make([]byte, 64) // Leer más bytes para debug
-    n, err := fs.File.Read(debugBytes)
-    if err != nil {
-        return fmt.Errorf("error al leer bytes de debug: %v", err)
-    }
-    fmt.Printf("[DEBUG] Primeros %d bytes del superbloque: %v\n", n, debugBytes[:n])
-    
-    // Regresar a la posición original y leer el superbloque
-    _, err = fs.File.Seek(int64(fs.Partition.Part_start), 0)
-    if err != nil {
-        return fmt.Errorf("error al reposicionarse: %v", err)
-    }
-    
-    err = binary.Read(fs.File, binary.LittleEndian, &fs.SuperBlock)
-    if err != nil {
-        return fmt.Errorf("error al leer superbloque: %v", err)
-    }
-    
-    fmt.Printf("[DEBUG] Magic number leído: 0x%X (esperado: 0xEF53)\n", fs.SuperBlock.S_magic)
-    fmt.Printf("[DEBUG] Otros campos del superbloque:\n")
-    fmt.Printf("        S_inodes_count: %d\n", fs.SuperBlock.S_inodes_count)
-    fmt.Printf("        S_blocks_count: %d\n", fs.SuperBlock.S_blocks_count)
-    fmt.Printf("        S_inode_start: %d\n", fs.SuperBlock.S_inode_start)
-    fmt.Printf("        S_block_start: %d\n", fs.SuperBlock.S_block_start)
-    
-    if fs.SuperBlock.S_magic != 0xEF53 {
-        return fmt.Errorf("sistema de archivos no válido (magic: 0x%X). La partición no está formateada o hay un error en mkfs", fs.SuperBlock.S_magic)
-    }
-    return nil
-}
-
-func (fs *EXT2FileSystem) LeerArchivoUsersTXT() (string, error) {
-    fmt.Printf("[DEBUG] Leyendo archivo users.txt (inodo 0)\n")
-    
-    inodo, err := fs.LeerInodo(0)
-    if err != nil {
-        return "", fmt.Errorf("error al leer inodo de users.txt: %v", err)
-    }
-    
-    fmt.Printf("[DEBUG] Inodo users.txt - tipo: %d, tamaño: %d, bloque[0]: %d\n", 
-        inodo.I_type, inodo.I_s, inodo.I_block[0])
-    
-    if inodo.I_type != [1]byte{1} {
-        return "", fmt.Errorf("users.txt no es un archivo válido (tipo: %v)", inodo.I_type)
-    }
-    if inodo.I_block[0] == -1 {
-        return "", fmt.Errorf("users.txt no tiene bloques asignados")
-    }
-    
-    bloque, err := fs.LeerBloqueArchivo(inodo.I_block[0])
-    if err != nil {
-        return "", fmt.Errorf("error al leer bloque de users.txt: %v", err)
-    }
-    
-    contenido := string(bloque.B_content[:inodo.I_s])
-    fmt.Printf("[DEBUG] Contenido users.txt leído: %q\n", contenido)
-    return contenido, nil
-}
-
-func (fs *EXT2FileSystem) LeerInodo(numero int32) (structs.Inodo, error) {
-    var inodo structs.Inodo
-    posicionInodo := int64(fs.SuperBlock.S_inode_start) + int64(numero)*int64(fs.SuperBlock.S_inode_s)
-    
-    fmt.Printf("[DEBUG] Leyendo inodo %d desde posición: %d\n", numero, posicionInodo)
-    
-    _, err := fs.File.Seek(posicionInodo, 0)
-    if err != nil {
-        return inodo, err
-    }
-    err = binary.Read(fs.File, binary.LittleEndian, &inodo)
-    return inodo, err
-}
-
-func (fs *EXT2FileSystem) LeerBloqueArchivo(numero int32) (structs.BArchivo, error) {
-    var bloque structs.BArchivo
-    posicionBloque := int64(fs.SuperBlock.S_block_start) + int64(numero)*int64(fs.SuperBlock.S_block_s)
-    
-    fmt.Printf("[DEBUG] Leyendo bloque %d desde posición: %d\n", numero, posicionBloque)
-    
-    _, err := fs.File.Seek(posicionBloque, 0)
-    if err != nil {
-        return bloque, err
-    }
-    err = binary.Read(fs.File, binary.LittleEndian, &bloque)
-    return bloque, err
-}
-
-func (fs *EXT2FileSystem) BuscarInodoPorNombre(nombre string) (structs.Inodo, int32, error) {
-    raiz, err := fs.LeerInodo(1)
-    if err != nil {
-        return structs.Inodo{}, -1, fmt.Errorf("error al leer inodo raíz: %v", err)
-    }
-
-    for _, blk := range raiz.I_block {
-        if blk == -1 {
-            continue
-        }
-        var bloque structs.BCarpeta
-        pos := int64(fs.SuperBlock.S_block_start) + int64(blk)*int64(fs.SuperBlock.S_block_s)
-        fs.File.Seek(pos, 0)
-        err := binary.Read(fs.File, binary.LittleEndian, &bloque)
-        if err != nil {
-            continue
-        }
-        for _, content := range bloque.B_content {
-            n := strings.TrimRight(string(content.B_name[:]), "\x00")
-            if n == nombre {
-                inodo, err := fs.LeerInodo(content.B_inodo)
-                return inodo, content.B_inodo, err
+    size := int(inoUsers.I_s)
+    if size <= 0 || size > len(bfile.B_content) {
+        size = len(bfile.B_content)
+        for i, b := range bfile.B_content {
+            if b == 0 {
+                size = i
+                break
             }
         }
     }
-    return structs.Inodo{}, -1, fmt.Errorf("archivo %s no encontrado", nombre)
+
+    return string(bfile.B_content[:size]), nil
 }
 
-func (fs *EXT2FileSystem) EscribirInodo(num int32, inodo structs.Inodo) error {
-    pos := int64(fs.SuperBlock.S_inode_start) + int64(num)*int64(fs.SuperBlock.S_inode_s)
-    _, err := fs.File.Seek(pos, 0)
-    if err != nil {
-        return err
+func firstNonEmpty(a, b string) string {
+    if strings.TrimSpace(a) != "" {
+        return a
     }
-    return binary.Write(fs.File, binary.LittleEndian, &inodo)
+    return b
 }
 
-func (fs *EXT2FileSystem) EscribirBloqueArchivo(num int32, bloque structs.BArchivo) error {
-    pos := int64(fs.SuperBlock.S_block_start) + int64(num)*int64(fs.SuperBlock.S_block_s)
-    _, err := fs.File.Seek(pos, 0)
-    if err != nil {
-        return err
+func unquoteValue(s string) string {
+    v := strings.TrimSpace(s)
+    if len(v) >= 2 && ((strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"")) ||
+        (strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'"))) {
+        return v[1 : len(v)-1]
     }
-    return binary.Write(fs.File, binary.LittleEndian, &bloque)
+    return v
 }

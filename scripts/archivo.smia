@@ -1,0 +1,81 @@
+# Crear disco de 10 MB
+mkdisk -size=10 -unit=M -path="/home/emanuel/Disco1.mia"
+
+# Crear partición primaria de 1 MB
+fdisk -size=1024 -unit=K -type=P -path="/home/emanuel/Disco1.mia" -name=Part1
+
+# Montar partición
+mount -path="/home/emanuel/Disco1.mia" -name=Part1
+
+# Formatear partición
+mkfs -id=391A
+
+# Iniciar sesión con root
+login -user=root -pass=123 -id=391A
+
+# Ver contenido inicial de users.txt
+cat -file=/users.txt
+
+# Crear grupo y verificar
+mkgrp -name=usuarios
+cat -file=/users.txt
+
+# Crear usuario en el grupo
+mkusr -user=user1 -pass=usuario -grp=usuarios
+cat -file=/users.txt
+
+# Cambiar grupo del usuario
+chgrp -user=user1 -grp=root
+cat -file=/users.txt
+
+# Eliminar usuario
+rmusr -user=user1
+cat -file=/users.txt
+
+# Eliminar grupo
+rmgrp -name=usuarios
+cat -file=/users.txt
+
+# Crear carpetas y archivos
+mkdir -p -path=/home/user/docs/usac
+mkfile -size=15 -path=/home/user/docs/a.txt -r
+mkdir -p -path=/home/mis_docs
+mkfile -path=/home/mis_docs/arch1.txt
+
+# Concatenar archivos
+cat -file1=/home/user/docs/a.txt -file2=/home/mis_docs/arch1.txt
+
+# Cerrar sesión
+logout
+
+
+########################
+#   REPORTES GRAPHVIZ  #
+########################
+
+# Reporte del MBR
+rep -id=391A -path="/home/emanuel/reportes/mbr.png" -name=mbr
+
+# Reporte del disco
+rep -id=391A -path="/home/emanuel/reportes/disk.png" -name=disk
+
+# Reporte del superbloque
+rep -id=391A -path="/home/emanuel/reportes/sb.png" -name=sb
+
+# Reporte de inodos
+rep -id=391A -path="/home/emanuel/reportes/inodes.png" -name=inode
+
+# Reporte de bloques
+rep -id=391A -path="/home/emanuel/reportes/blocks.png" -name=block
+
+# Reporte de bitmap de inodos
+rep -id=391A -path="/home/emanuel/reportes/bm_inode.png" -name=bm_inode
+
+# Reporte de bitmap de bloques
+rep -id=391A -path="/home/emanuel/reportes/bm_block.png" -name=bm_block
+
+# Reporte del archivo users.txt
+rep -id=391A -path="/home/emanuel/reportes/users.png" -name=file -path_file_ls=/users.txt
+
+# Reporte de un directorio
+rep -id=391A -path="/home/emanuel/reportes/ls_docs.png" -name=ls -path_file_ls=/home/user/docs

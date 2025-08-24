@@ -1,18 +1,18 @@
 package commands
 
 import (
+    "backend/structs"
+    "bytes"
+    "encoding/binary"
     "fmt"
     "strconv"
     "strings"
-    "backend/structs"
-    "unsafe"
 )
 
 func Mkgrp(args map[string]string) string {
     if currentUser == nil {
         return "Error: No hay una sesión activa."
     }
-
     if currentUser.Username != "root" {
         return "Error: Solo el usuario root puede ejecutar mkgrp."
     }
@@ -21,104 +21,92 @@ func Mkgrp(args map[string]string) string {
     if !ok || strings.TrimSpace(name) == "" {
         return "Error: Falta el parámetro obligatorio -name."
     }
+    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    if err != nil {
+        return fmt.Sprintf("Error: %v", err)
+    }
+    defer disk.Close()
 
-    // Leer contenido actual
-    contenidoActual := LeerArchivoUsersTXT(currentUser.PartitionID)
-    if strings.HasPrefix(contenidoActual, "Error:") {
-        return contenidoActual
+    contenidoActual, err := LeerArchivoUsersTXT(disk, sb)
+    if err != nil {
+        return fmt.Sprintf("Error: %v", err)
     }
 
-    // Verificar si el grupo ya existe
     if GrupoExiste(contenidoActual, name) {
         return "Error: El grupo '" + name + "' ya existe."
     }
 
-    // Obtener siguiente ID
     nuevoID := ObtenerSiguienteIDGrupo(contenidoActual)
-    
-    // Crear nueva línea
     nuevaLinea := fmt.Sprintf("%d,G,%s\n", nuevoID, name)
     nuevoContenido := contenidoActual + nuevaLinea
 
-    // Escribir usando el método existente
-    err := EscribirUsersTxt(currentUser.PartitionID, nuevoContenido)
-    if err != nil {
+    if err := EscribirUsersTxt(currentUser.PartitionID, nuevoContenido); err != nil {
         return "Error al escribir users.txt: " + err.Error()
     }
 
     return fmt.Sprintf("Grupo '%s' creado exitosamente con ID %d", name, nuevoID)
 }
 
-// Función para escribir users.txt usando tu sistema existente
 func EscribirUsersTxt(partitionID string, contenido string) error {
-    for _, pm := range structs.Particiones_Montadas {
-        if pm.Id == partitionID {
-            path := pm.Path
-            partition := pm.Partition
-
-            fs := CargarSistemaEXT2(path, partition)
-            if fs == nil {
-                return fmt.Errorf("no se pudo cargar el sistema de archivos")
-            }
-            defer fs.File.Close()
-
-            // Leer el inodo 0 (users.txt)
-            inodo, err := fs.LeerInodo(0)
-            if err != nil {
-                return fmt.Errorf("error al leer inodo de users.txt: %v", err)
-            }
-
-            // Verificar que es un archivo
-            if inodo.I_type[0] != byte(1) {
-                return fmt.Errorf("users.txt no es un archivo válido")
-            }
-
-            // Leer el bloque actual
-            bloque, err := fs.LeerBloqueArchivo(inodo.I_block[0])
-            if err != nil {
-                return fmt.Errorf("error al leer bloque de users.txt: %v", err)
-            }
-
-            // Limpiar el bloque y copiar nuevo contenido
-            for i := range bloque.B_content {
-                bloque.B_content[i] = 0
-            }
-
-            contenidoBytes := []byte(contenido)
-            if len(contenidoBytes) > 64 {
-                contenidoBytes = contenidoBytes[:64] // Truncar si es muy largo
-            }
-            
-            copy(bloque.B_content[:], contenidoBytes)
-
-            // Actualizar tamaño en el inodo
-            inodo.I_s = int32(len(contenidoBytes))
-
-            // Escribir el bloque actualizado
-            posicionBloque := int64(fs.SuperBlock.S_block_start) + int64(inodo.I_block[0])*int64(fs.SuperBlock.S_block_s)
-            bloqueBytes := (*[unsafe.Sizeof(bloque)]byte)(unsafe.Pointer(&bloque))[:]
-            
-            _, err = fs.File.WriteAt(bloqueBytes, posicionBloque)
-            if err != nil {
-                return fmt.Errorf("error al escribir bloque: %v", err)
-            }
-
-            // Escribir el inodo actualizado
-            posicionInodo := int64(fs.SuperBlock.S_inode_start)
-            inodoBytes := (*[unsafe.Sizeof(inodo)]byte)(unsafe.Pointer(&inodo))[:]
-            
-            _, err = fs.File.WriteAt(inodoBytes, posicionInodo)
-            if err != nil {
-                return fmt.Errorf("error al escribir inodo: %v", err)
-            }
-
-            return nil
-        }
+    disk, sb, err := CargarSistemaEXT2(partitionID)
+    if err != nil {
+        return err
     }
-    return fmt.Errorf("partición con ID %s no encontrada", partitionID)
+    defer disk.Close()
+
+    inodeOffset := int64(sb.S_inode_start) + 1*int64(sb.S_inode_s)
+    if _, err := disk.Seek(inodeOffset, 0); err != nil {
+        return fmt.Errorf("posicionar inodo users.txt: %v", err)
+    }
+    var ino structs.Inodo
+    if err := binary.Read(disk, binary.LittleEndian, &ino); err != nil {
+        return fmt.Errorf("leer inodo users.txt: %v", err)
+    }
+    if ino.I_block[0] < 0 {
+        return fmt.Errorf("users.txt sin bloque asignado")
+    }
+
+    var b structs.BArchivo
+    data := []byte(contenido)
+    if len(data) > len(b.B_content) {
+        data = data[:len(b.B_content)]
+    }
+    for i := range b.B_content {
+        b.B_content[i] = 0
+    }
+    copy(b.B_content[:], data)
+
+    blockOffset := int64(sb.S_block_start) + int64(ino.I_block[0])*int64(sb.S_block_s)
+    var buf bytes.Buffer
+    if err := binary.Write(&buf, binary.LittleEndian, &b); err != nil {
+        return fmt.Errorf("serializar bloque: %v", err)
+    }
+    if _, err := disk.WriteAt(buf.Bytes(), blockOffset); err != nil {
+        return fmt.Errorf("escribir bloque users.txt: %v", err)
+    }
+
+    ino.I_s = int32(len(data))
+    var ibuf bytes.Buffer
+    if err := binary.Write(&ibuf, binary.LittleEndian, &ino); err != nil {
+        return fmt.Errorf("serializar inodo: %v", err)
+    }
+    if _, err := disk.WriteAt(ibuf.Bytes(), inodeOffset); err != nil {
+        return fmt.Errorf("escribir inodo users.txt: %v", err)
+    }
+    return nil
 }
 
-// Funciones auxiliares
+func nuevoContenidoSeguro(s string) string {
+    s = strings.ReplaceAll(s, "\r", "")
+    if s == "" {
+        return s
+    }
+    if !strings.HasSuffix(s, "\n") {
+        s += "\n"
+    }
+    return s
+}
+
 func GrupoExiste(contenido string, grupo string) bool {
     lineas := strings.Split(contenido, "\n")
     for _, linea := range lineas {
@@ -127,8 +115,14 @@ func GrupoExiste(contenido string, grupo string) bool {
             continue
         }
         campos := strings.Split(linea, ",")
-        if len(campos) >= 3 && strings.TrimSpace(campos[1]) == "G" && strings.TrimSpace(campos[2]) == grupo {
-            return true
+        if len(campos) >= 3 {
+            id := strings.TrimSpace(campos[0])
+            tipo := strings.TrimSpace(campos[1])
+            nombre := strings.TrimSpace(campos[2])
+            // Ignorar grupos eliminados (id=0)
+            if tipo == "G" && nombre == grupo && id != "0" {
+                return true
+            }
         }
     }
     return false
@@ -136,18 +130,24 @@ func GrupoExiste(contenido string, grupo string) bool {
 
 func ObtenerSiguienteIDGrupo(contenido string) int {
     maxID := 0
-    lineas := strings.Split(contenido, "\n")
-    for _, linea := range lineas {
-        linea = strings.TrimSpace(linea)
-        if linea == "" {
+    for _, l := range strings.Split(contenido, "\n") {
+        l = strings.TrimSpace(l)
+        if l == "" || strings.HasPrefix(l, "#") {
             continue
         }
-        campos := strings.Split(linea, ",")
-        if len(campos) >= 1 {
-            id, err := strconv.Atoi(strings.TrimSpace(campos[0]))
-            if err == nil && id > maxID {
-                maxID = id
-            }
+        p := strings.Split(l, ",")
+        if len(p) < 2 {
+            continue
+        }
+        if strings.TrimSpace(p[1]) != "G" {
+            continue
+        }
+        idStr := strings.TrimSpace(p[0])
+        if idStr == "0" {
+            continue
+        }
+        if id, err := strconv.Atoi(idStr); err == nil && id > maxID {
+            maxID = id
         }
     }
     return maxID + 1

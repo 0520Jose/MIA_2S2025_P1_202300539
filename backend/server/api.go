@@ -27,19 +27,30 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Error de decodificación del cuerpo de la solicitud", http.StatusBadRequest)
         return
     }
+
     var fullOutput strings.Builder
-    for _, line := range strings.Split(req.Comando, "\n") {
-        trimmedLine := strings.TrimSpace(line)
-        if trimmedLine != "" {
-            output := commands.ExecuteCommand(trimmedLine)
-            if output != "" {
-                fullOutput.WriteString(output + "\n")
-            }
+    lines := strings.Split(req.Comando, "\n")
+    for _, raw := range lines {
+        line := strings.TrimRight(raw, "\r")
+        trimmed := strings.TrimSpace(line)
+
+        if trimmed == "" {
+            fullOutput.WriteString("\n")
+            continue
+        }
+        if strings.HasPrefix(trimmed, "#") {
+            fullOutput.WriteString(line + "\n")
+            continue
+        }
+
+        output := commands.ExecuteCommand(line)
+        if output != "" {
+            fullOutput.WriteString(output + "\n")
         }
     }
 
     w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]string{"salida": strings.TrimSpace(fullOutput.String())})
+    _ = json.NewEncoder(w).Encode(map[string]string{"salida": fullOutput.String()})
 }
 
 func StartAPIServer(port string) {

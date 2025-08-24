@@ -13,7 +13,20 @@ import (
 )
 
 func Mkdisk(params map[string]string) string {
-    sizeStr, existe := params["-size"]
+    // Normalizar llaves a minúsculas y validar parámetros permitidos
+    allowed := map[string]struct{}{
+        "-size": {}, "-unit": {}, "-fit": {}, "-path": {},
+    }
+    normalized := make(map[string]string, len(params))
+    for k, v := range params {
+        lk := strings.ToLower(strings.TrimSpace(k))
+        if _, ok := allowed[lk]; !ok {
+            return fmt.Sprintf("Error: parámetro no reconocido: %s", k)
+        }
+        normalized[lk] = v
+    }
+
+    sizeStr, existe := normalized["-size"]
     if !existe {
         return fmt.Sprintf("Error: parámetro -size es obligatorio")
     }
@@ -23,7 +36,7 @@ func Mkdisk(params map[string]string) string {
         return fmt.Sprintf("Error: -size debe ser un entero positivo")
     }
 
-    path, existe := params["-path"]
+    path, existe := normalized["-path"]
     if !existe {
         return fmt.Sprintf("Error: parámetro -path es obligatorio")
     }
@@ -38,7 +51,7 @@ func Mkdisk(params map[string]string) string {
     }
 
     unit := "M"
-    if u, existe := params["-unit"]; existe {
+    if u, existe := normalized["-unit"]; existe {
         unit = strings.ToUpper(u)
     }
 
@@ -53,7 +66,7 @@ func Mkdisk(params map[string]string) string {
     }
 
     fit := "FF"
-    if f, existe := params["-fit"]; existe {
+    if f, existe := normalized["-fit"]; existe {
         f = strings.ToUpper(f)
         if f != "FF" && f != "BF" && f != "WF" {
             return fmt.Sprintf("Error: fit inválido (use FF, BF o WF)")
