@@ -19,7 +19,7 @@ func Fdisk(params map[string]string) string {
     }
 
     var err error
-    path, err = limpiarRuta(path)
+    path, err = LimpiarRuta(path)
     if err != nil {
         return fmt.Sprintf("Error en la ruta: %v", err)
     }
@@ -256,7 +256,7 @@ func ubicarPrimariaExtendida(mbr *structs.MBR, req int64, fit string) (int64, er
     }
 
     if len(gaps) == 0 {
-        return 0, fmt.Errorf("no hay espacio disponible")
+        return 0, fmt.Errorf("No hay espacio disponible")
     }
 
     switch fit {
@@ -291,7 +291,7 @@ func ubicarPrimariaExtendida(mbr *structs.MBR, req int64, fit string) (int64, er
             return gaps[worstIdx].start, nil
         }
     }
-    return 0, fmt.Errorf("no hay un segmento libre con tamaño suficiente")
+    return 0, fmt.Errorf("No hay un segmento libre con tamaño suficiente")
 }
 
 func crearLogica(file *os.File, ext *structs.Partition, name string, reqBytes int64, fit string) string {

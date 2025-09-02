@@ -11,7 +11,7 @@ import (
 )
 
 func Mkfile(params map[string]string) string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
     rawPath, ok := params["-path"]
@@ -70,12 +70,12 @@ func Mkfile(params map[string]string) string {
         return "Error: nombre de archivo excede 12 caracteres."
     }
 
-    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
-    pm := getMountByID(currentUser.PartitionID)
+    pm := getMountByID(usuarioActual.PartitionID)
     if pm == nil {
         return "Error: partición no montada."
     }
@@ -89,7 +89,7 @@ func Mkfile(params map[string]string) string {
     if err != nil {
         return "Error: " + err.Error()
     }
-    if !hasPerm(&dirIno, permWrite|permExec) {
+    if !Permisos(&dirIno, permWrite|permExec) {
         return "Error: permiso denegado en carpeta padre."
     }
 
@@ -131,8 +131,8 @@ func Mkfile(params map[string]string) string {
     }
 
     var ino structs.Inodo
-    ino.I_uid = int32(currentUser.UID)
-    ino.I_gid = int32(currentUser.GID)
+    ino.I_uid = int32(usuarioActual.UID)
+    ino.I_gid = int32(usuarioActual.GID)
     ino.I_s = int32(len(data))
     t := fecha17()
     copy(ino.I_atime[:], t)
@@ -203,7 +203,7 @@ func ensureParentDir(f *os.File, sb *structs.SuperBloque, parts []string, recurs
         if err != nil {
             return -1, err
         }
-        if !hasPerm(&parentIno, permWrite) && !isRoot() {
+        if !Permisos(&parentIno, permWrite) && !EsRoot() {
             return -1, fmt.Errorf("permiso denegado para crear carpeta '%s'", name)
         }
         newIno, err := createDirectory(f, sb, curr, name)
@@ -252,8 +252,8 @@ func createDirectory(f *os.File, sb *structs.SuperBloque, parentIno int32, name 
     }
 
     var ino structs.Inodo
-    ino.I_uid = int32(currentUser.UID)
-    ino.I_gid = int32(currentUser.GID)
+    ino.I_uid = int32(usuarioActual.UID)
+    ino.I_gid = int32(usuarioActual.GID)
     ino.I_s = 0
     t := fecha17()
     copy(ino.I_atime[:], t)
@@ -355,7 +355,7 @@ func allocInode(f *os.File, sb *structs.SuperBloque) (int32, error) {
             return int32(i), nil
         }
     }
-    return -1, fmt.Errorf("no hay inodos disponibles")
+    return -1, fmt.Errorf("No hay inodos disponibles")
 }
 
 func allocBlock(f *os.File, sb *structs.SuperBloque) (int32, error) {
@@ -374,7 +374,7 @@ func allocBlock(f *os.File, sb *structs.SuperBloque) (int32, error) {
             return int32(i), nil
         }
     }
-    return -1, fmt.Errorf("no hay bloques disponibles")
+    return -1, fmt.Errorf("No hay bloques disponibles")
 }
 
 func nextFreeIndex(bm []byte) int32 {

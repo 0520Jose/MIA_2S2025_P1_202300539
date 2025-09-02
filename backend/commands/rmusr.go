@@ -6,10 +6,10 @@ import (
 )
 
 func Rmusr(args map[string]string) string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
-    if currentUser.Username != "root" {
+    if usuarioActual.Username != "root" {
         return "Error: Solo el usuario root puede ejecutar rmusr."
     }
 
@@ -19,7 +19,7 @@ func Rmusr(args map[string]string) string {
     }
     target := strings.TrimSpace(u)
 
-    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
@@ -66,7 +66,7 @@ func Rmusr(args map[string]string) string {
         nuevoContenido += "\n"
     }
 
-    if err := EscribirUsersTxt(currentUser.PartitionID, nuevoContenido); err != nil {
+    if err := EscribirUsersTxt(usuarioActual.PartitionID, nuevoContenido); err != nil {
         return "Error al escribir users.txt: " + err.Error()
     }
 

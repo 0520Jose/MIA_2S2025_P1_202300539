@@ -153,3 +153,12 @@ rep -id=391A -path="/home/emanuel/reportes3/bm_block.txt" -name=bm_block
 
 # Reporte del árbol de archivos
 rep -id=391A -path="/home/emanuel/reportes3/tree_completo.png" -name=tree
+
+# Reporte del super bloque
+rep -id=391A -path="/home/emanuel/reportes3/sb_completo.png" -name=sb
+
+# Reporte del file
+rep -id=391A -path="/home/emanuel/reportes3/file.txt" -path_file_ls=/home/admin/perfil.txt  -name=file
+
+# Reporte del ls
+rep -id=391A -path="/home/emanuel/reportes3/reportels.png" -path_file_ls=/home/ -name=ls

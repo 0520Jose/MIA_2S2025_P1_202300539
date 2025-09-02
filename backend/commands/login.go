@@ -9,7 +9,7 @@ import (
     "strings"
 )
 
-var currentUser *UserSession
+var usuarioActual *UserSession
 
 type UserSession struct {
     Username    string
@@ -20,7 +20,7 @@ type UserSession struct {
 }
 
 func Login(params map[string]string) string {
-    if currentUser != nil {
+    if usuarioActual != nil {
         return "Error: ya hay un usuario logueado"
     }
 
@@ -113,7 +113,7 @@ func Login(params map[string]string) string {
         return "Error: usuario o contraseña incorrectos"
     }
 
-    currentUser = &UserSession{
+    usuarioActual = &UserSession{
         Username:    user,
         PartitionID: id,
         Group:       grupoNombre,
@@ -124,15 +124,15 @@ func Login(params map[string]string) string {
 }
 
 func Logout() string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: no hay ningún usuario logueado"
     }
-    currentUser = nil
+    usuarioActual = nil
     return "Logout exitoso"
 }
 
 func GetCurrentUser() *UserSession {
-    return currentUser
+    return usuarioActual
 }
 
 func CargarSuperBloque(f *os.File, partStart int32) (*structs.SuperBloque, error) {
@@ -149,69 +149,7 @@ func CargarSuperBloque(f *os.File, partStart int32) (*structs.SuperBloque, error
     return &sb, nil
 }
 
-func LeerArchivoUsersTXT(f *os.File, sb *structs.SuperBloque) (string, error) {
-    if _, err := f.Seek(int64(sb.S_inode_start), 0); err != nil {
-        return "", fmt.Errorf("posicionar inodo raíz: %v", err)
-    }
-    var inoRoot structs.Inodo
-    if err := binary.Read(f, binary.LittleEndian, &inoRoot); err != nil {
-        return "", fmt.Errorf("leer inodo raíz: %v", err)
-    }
 
-    if inoRoot.I_block[0] < 0 {
-        return "", fmt.Errorf("raíz sin bloque asignado")
-    }
-    if _, err := f.Seek(int64(sb.S_block_start)+int64(inoRoot.I_block[0])*int64(sb.S_block_s), 0); err != nil {
-        return "", fmt.Errorf("posicionar bloque raíz: %v", err)
-    }
-    var bdir structs.BCarpeta
-    if err := binary.Read(f, binary.LittleEndian, &bdir); err != nil {
-        return "", fmt.Errorf("leer bloque de carpeta raíz: %v", err)
-    }
-
-    usersIno := int32(-1)
-    for _, e := range bdir.B_content {
-        if e.B_inodo >= 0 && strings.TrimRight(string(e.B_name[:]), "\x00") == "users.txt" {
-            usersIno = e.B_inodo
-            break
-        }
-    }
-    if usersIno < 0 {
-        usersIno = 1
-    }
-
-    if _, err := f.Seek(int64(sb.S_inode_start)+int64(usersIno)*int64(sb.S_inode_s), 0); err != nil {
-        return "", fmt.Errorf("posicionar inodo users.txt: %v", err)
-    }
-    var inoUsers structs.Inodo
-    if err := binary.Read(f, binary.LittleEndian, &inoUsers); err != nil {
-        return "", fmt.Errorf("leer inodo users.txt: %v", err)
-    }
-    if inoUsers.I_block[0] < 0 {
-        return "", fmt.Errorf("users.txt sin bloque de datos")
-    }
-
-    if _, err := f.Seek(int64(sb.S_block_start)+int64(inoUsers.I_block[0])*int64(sb.S_block_s), 0); err != nil {
-        return "", fmt.Errorf("posicionar bloque users.txt: %v", err)
-    }
-    var bfile structs.BArchivo
-    if err := binary.Read(f, binary.LittleEndian, &bfile); err != nil {
-        return "", fmt.Errorf("leer bloque users.txt: %v", err)
-    }
-
-    size := int(inoUsers.I_s)
-    if size <= 0 || size > len(bfile.B_content) {
-        size = len(bfile.B_content)
-        for i, b := range bfile.B_content {
-            if b == 0 {
-                size = i
-                break
-            }
-        }
-    }
-
-    return string(bfile.B_content[:size]), nil
-}
 
 func firstNonEmpty(a, b string) string {
     if strings.TrimSpace(a) != "" {

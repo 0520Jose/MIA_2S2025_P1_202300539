@@ -13,7 +13,6 @@ import (
 )
 
 func Mkdisk(params map[string]string) string {
-    // Normalizar llaves a minúsculas y validar parámetros permitidos
     allowed := map[string]struct{}{
         "-size": {}, "-unit": {}, "-fit": {}, "-path": {},
     }
@@ -41,7 +40,7 @@ func Mkdisk(params map[string]string) string {
         return fmt.Sprintf("Error: parámetro -path es obligatorio")
     }
 
-    path, err = limpiarRuta(path)
+    path, err = LimpiarRuta(path)
     if err != nil {
         return fmt.Sprintf("Error en la ruta: %v", err)
     }

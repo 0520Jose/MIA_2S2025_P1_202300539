@@ -7,6 +7,7 @@ import (
     "io"
     "os"
     "strings"
+    "path/filepath"
 )
 
 var Particiones_Montadas []PartitionMount
@@ -101,11 +102,6 @@ type Bloque struct {
     Data [64]byte
 }
 
-func (m *MBR) WriteToFile(file *os.File) error {
-    file.Seek(0, 0)
-    return binary.Write(file, binary.LittleEndian, m)
-}
-
 func LeerMBR(archivo *os.File) (MBR, error) {
     archivo.Seek(0, 0)
     var mbr MBR
@@ -113,40 +109,31 @@ func LeerMBR(archivo *os.File) (MBR, error) {
     return mbr, err
 }
 
-func GetMountedPartitionByID(id string, mbr MBR) Partition {
+func NombreDisco_ID(id string) string {
     for _, pm := range Particiones_Montadas {
         if pm.Id == id {
-            return pm.Partition
-        }
-    }
-    return Partition{}
-}
-
-func GetDiskPathByID(id string) string {
-    for _, pm := range Particiones_Montadas {
-        if pm.Id == id {
-            return pm.Path
+            return filepath.Base(pm.Path)
         }
     }
     return ""
 }
 
-func GetFileSystemByID(id string) (*os.File, *SuperBloque, *MBR, error) {
+func SistemaArchivos_ID(id string) (*os.File, *SuperBloque, *MBR, error) {
     for _, pm := range Particiones_Montadas {
         if pm.Id == id {
             f, err := os.OpenFile(pm.Path, os.O_RDONLY, 0)
             if err != nil {
-                return nil, nil, nil, fmt.Errorf("no se pudo abrir el disco: %v", err)
+                return nil, nil, nil, fmt.Errorf("No se pudo abrir el disco: %v", err)
             }
 
             var mbr MBR
             if _, err := f.Seek(0, io.SeekStart); err != nil {
                 f.Close()
-                return nil, nil, nil, fmt.Errorf("no se pudo buscar MBR: %v", err)
+                return nil, nil, nil, fmt.Errorf("No se pudo buscar MBR: %v", err)
             }
             if err := binary.Read(f, binary.LittleEndian, &mbr); err != nil {
                 f.Close()
-                return nil, nil, nil, fmt.Errorf("no se pudo leer MBR: %v", err)
+                return nil, nil, nil, fmt.Errorf("No se pudo leer MBR: %v", err)
             }
 
             partStart := pm.Partition.Part_start
@@ -158,28 +145,28 @@ func GetFileSystemByID(id string) (*os.File, *SuperBloque, *MBR, error) {
             var sb SuperBloque
             if _, err := f.Seek(int64(partStart), io.SeekStart); err != nil {
                 f.Close()
-                return nil, nil, nil, fmt.Errorf("no se pudo buscar superbloque: %v", err)
+                return nil, nil, nil, fmt.Errorf("No se pudo buscar superbloque: %v", err)
             }
             if err := binary.Read(f, binary.LittleEndian, &sb); err != nil {
                 f.Close()
-                return nil, nil, nil, fmt.Errorf("no se pudo leer superbloque: %v", err)
+                return nil, nil, nil, fmt.Errorf("No se pudo leer superbloque: %v", err)
             }
             if sb.S_magic != 0xEF53 {
                 f.Close()
-                return nil, nil, nil, fmt.Errorf("superbloque inválido")
+                return nil, nil, nil, fmt.Errorf("Superbloque inválido")
             }
 
             return f, &sb, &mbr, nil
         }
     }
-    return nil, nil, nil, fmt.Errorf("partición no montada: %s", id)
+    return nil, nil, nil, fmt.Errorf("Partición no montada: %s", id)
 }
 
-func GetSuperBlockByID(id string) (*os.File, *SuperBloque, *MBR, error) {
-    return GetFileSystemByID(id)
+func SuperBloque_ID(id string) (*os.File, *SuperBloque, *MBR, error) {
+    return SistemaArchivos_ID(id)
 }
 
-func GetBitmapInodes(f *os.File, sb *SuperBloque) []byte {
+func BitMapInodos(f *os.File, sb *SuperBloque) []byte {
     n := int(sb.S_inodes_count)
     if n <= 0 {
         return nil
@@ -209,14 +196,14 @@ func GetBitmapBlocks(f *os.File, sb *SuperBloque) []byte {
     return bitmap
 }
 
-func GetInode(f *os.File, sb *SuperBloque, idx int) (Inodo, bool) {
+func ObtenerInodo(f *os.File, sb *SuperBloque, idx int) (Inodo, bool) {
     var inode Inodo
 
     if idx < 0 || idx >= int(sb.S_inodes_count) {
         return inode, false
     }
 
-    bm := GetBitmapInodes(f, sb)
+    bm := BitMapInodos(f, sb)
     if bm == nil || idx >= len(bm) || bm[idx] == 0 {
         return inode, false
     }
@@ -231,7 +218,7 @@ func GetInode(f *os.File, sb *SuperBloque, idx int) (Inodo, bool) {
     return inode, true
 }
 
-func GetBlock(f *os.File, sb *SuperBloque, idx int) (Bloque, bool) {
+func ObtenerBloque(f *os.File, sb *SuperBloque, idx int) (Bloque, bool) {
     var block Bloque
     if idx < 0 || idx >= int(sb.S_blocks_count) {
         return block, false
@@ -252,10 +239,6 @@ func GetBlock(f *os.File, sb *SuperBloque, idx int) (Bloque, bool) {
     return block, true
 }
 
-func (b Bloque) ContentString() string {
-    return string(b.Data[:])
-}
-
 func trimBytes(b []byte) string {
     if i := bytes.IndexByte(b, 0); i >= 0 {
         b = b[:i]
@@ -263,15 +246,15 @@ func trimBytes(b []byte) string {
     return strings.TrimSpace(string(b))
 }
 
-func isDir(in Inodo) bool  { return len(in.I_type) > 0 && in.I_type[0] == 0 }
-func isFile(in Inodo) bool { return len(in.I_type) > 0 && in.I_type[0] == 1 }
+func EsCarpeta(in Inodo) bool  { return len(in.I_type) > 0 && in.I_type[0] == 0 }
+func EsArchivo(in Inodo) bool { return len(in.I_type) > 0 && in.I_type[0] == 1 }
 
-func readBlockAsCarpeta(f *os.File, sb *SuperBloque, idx int32) (BCarpeta, bool) {
+func LeerBloqueCarptea(f *os.File, sb *SuperBloque, idx int32) (BCarpeta, bool) {
     var bc BCarpeta
     if idx < 0 {
         return bc, false
     }
-    block, ok := GetBlock(f, sb, int(idx))
+    block, ok := ObtenerBloque(f, sb, int(idx))
     if !ok {
         return bc, false
     }
@@ -282,12 +265,12 @@ func readBlockAsCarpeta(f *os.File, sb *SuperBloque, idx int32) (BCarpeta, bool)
     return bc, true
 }
 
-func readBlockAsArchivo(f *os.File, sb *SuperBloque, idx int32) (BArchivo, bool) {
+func LeerBloqueArchivo(f *os.File, sb *SuperBloque, idx int32) (BArchivo, bool) {
     var ba BArchivo
     if idx < 0 {
         return ba, false
     }
-    block, ok := GetBlock(f, sb, int(idx))
+    block, ok := ObtenerBloque(f, sb, int(idx))
     if !ok {
         return ba, false
     }
@@ -298,16 +281,16 @@ func readBlockAsArchivo(f *os.File, sb *SuperBloque, idx int32) (BArchivo, bool)
     return ba, true
 }
 
-func listDir(f *os.File, sb *SuperBloque, dir Inodo) map[string]int32 {
+func ListaCarpetas(f *os.File, sb *SuperBloque, dir Inodo) map[string]int32 {
     entries := make(map[string]int32)
-    bmIn := GetBitmapInodes(f, sb)
+    bmIn := BitMapInodos(f, sb)
 
     for i := 0; i < 12; i++ {
         blk := dir.I_block[i]
         if blk < 0 {
             continue
         }
-        bc, ok := readBlockAsCarpeta(f, sb, blk)
+        bc, ok := LeerBloqueCarptea(f, sb, blk)
         if !ok {
             continue
         }
@@ -325,7 +308,7 @@ func listDir(f *os.File, sb *SuperBloque, dir Inodo) map[string]int32 {
     return entries
 }
 
-func resolvePath(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
+func Direccion(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
     comps := []string{}
     for _, p := range strings.Split(path, "/") {
         p = strings.TrimSpace(p)
@@ -335,7 +318,7 @@ func resolvePath(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
     }
 
     currIdx := 0
-    curr, ok := GetInode(f, sb, currIdx)
+    curr, ok := ObtenerInodo(f, sb, currIdx)
     if !ok {
         return -1, Inodo{}, false
     }
@@ -345,15 +328,15 @@ func resolvePath(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
     }
 
     for _, name := range comps {
-        if !isDir(curr) {
+        if !EsCarpeta(curr) {
             return -1, Inodo{}, false
         }
-        ents := listDir(f, sb, curr)
+        ents := ListaCarpetas(f, sb, curr)
         nextIdx32, exists := ents[name]
         if !exists {
             return -1, Inodo{}, false
         }
-        next, ok := GetInode(f, sb, int(nextIdx32))
+        next, ok := ObtenerInodo(f, sb, int(nextIdx32))
         if !ok {
             return -1, Inodo{}, false
         }
@@ -363,7 +346,7 @@ func resolvePath(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
     return currIdx, curr, true
 }
 
-func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
+func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
     var b strings.Builder
     b.WriteString("digraph G {\n")
     b.WriteString("  node [shape=plaintext, fontname=\"Arial\"];\n")
@@ -380,12 +363,11 @@ func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
         }
         visited[idx] = true
         
-        ino, ok := GetInode(f, sb, idx)
+        ino, ok := ObtenerInodo(f, sb, idx)
         if !ok {
             return
         }
         
-        // Tabla inodo con encabezado mostrando número y tipo
         b.WriteString(fmt.Sprintf("  inode%d [label=<\n", idx))
         b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightblue'>\n")
         b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>INODO %d</b></td></tr>\n", idx))
@@ -403,15 +385,15 @@ func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
         b.WriteString("    </table>\n")
         b.WriteString("  >];\n")
         
-        if isDir(ino) {
+        if EsCarpeta(ino) {
             for i := 0; i < 12; i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
-                    generateDirectoryBlock(f, sb, &b, int(blockIdx), idx)
+                    GenerarBloqueCarpeta(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
                     
-                    bc, ok := readBlockAsCarpeta(f, sb, blockIdx)
+                    bc, ok := LeerBloqueCarptea(f, sb, blockIdx)
                     if ok {
                         for _, content := range bc.B_content {
                             name := trimBytes(content.B_name[:])
@@ -424,20 +406,19 @@ func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
                     }
                 }
             }
-        } else if isFile(ino) {
+        } else if EsArchivo(ino) {
             for i := 0; i < 12; i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
-                    generateFileBlock(f, sb, &b, int(blockIdx), idx, s)
+                    GenerarBloqueArchivo(f, sb, &b, int(blockIdx), idx, s)
                     visitedBlocks[int(blockIdx)] = true
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
                 }
             }
-            // Bloques de apuntadores: mostrar solo 2
             for i := 12; i < 15; i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
-                    generatePointerBlock(f, sb, &b, int(blockIdx), idx)
+                    GenerarBloquePuntero(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
                 }
@@ -450,14 +431,14 @@ func GenerateTreeGraph(f *os.File, sb *SuperBloque, s int) string {
     return b.String()
 }
 
-func generateFileBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int, s int) {
-    ba, ok := readBlockAsArchivo(f, sb, int32(blockIdx))
+func GenerarBloqueArchivo(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int, s int) {
+    ba, ok := LeerBloqueArchivo(f, sb, int32(blockIdx))
     if !ok {
         return
     }
     content := trimBytes(ba.B_content[:])
-    if len(content) > 3 {
-        content = content[:3]
+    if len(content) > 64 {
+        content = content[:64]
     }
 
     b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
@@ -468,8 +449,8 @@ func generateFileBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx
     b.WriteString("  >];\n")
 }
 
-func generatePointerBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
-    block, ok := GetBlock(f, sb, blockIdx)
+func GenerarBloquePuntero(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
+    block, ok := ObtenerBloque(f, sb, blockIdx)
     if !ok {
         return
     }
@@ -493,8 +474,8 @@ func generatePointerBlock(f *os.File, sb *SuperBloque, b *strings.Builder, block
     b.WriteString("  >];\n")
 }
 
-func generateDirectoryBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
-    bc, ok := readBlockAsCarpeta(f, sb, int32(blockIdx))
+func GenerarBloqueCarpeta(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
+    bc, ok := LeerBloqueCarptea(f, sb, int32(blockIdx))
     if !ok {
         return
     }
@@ -518,19 +499,19 @@ func generateDirectoryBlock(f *os.File, sb *SuperBloque, b *strings.Builder, blo
 }
 
 
-func ReadFileFromFS(id, path string) (string, error) {
-    f, sb, _, err := GetFileSystemByID(id)
+func LeerArchivoDeFS(id, path string) (string, error) {
+    f, sb, _, err := SistemaArchivos_ID(id)
     if err != nil {
         return "", err
     }
     defer f.Close()
 
-    _, ino, ok := resolvePath(f, sb, path)
+    _, ino, ok := Direccion(f, sb, path)
     if !ok {
         return "", fmt.Errorf("ruta no encontrada: %s", path)
     }
-    if !isFile(ino) {
-        return "", fmt.Errorf("no es un archivo: %s", path)
+    if !EsArchivo(ino) {
+        return "", fmt.Errorf("No es un archivo: %s", path)
     }
 
     var data []byte
@@ -540,7 +521,7 @@ func ReadFileFromFS(id, path string) (string, error) {
         if blk < 0 {
             continue
         }
-        ba, ok := readBlockAsArchivo(f, sb, blk)
+        ba, ok := LeerBloqueArchivo(f, sb, blk)
         if !ok {
             break
         }
@@ -554,7 +535,7 @@ func ReadFileFromFS(id, path string) (string, error) {
     return string(data), nil
 }
 
-type DirEntry struct {
+type CarpetaEntrada struct {
     Nombre       string
     Tipo         string
     Permisos     string
@@ -562,36 +543,37 @@ type DirEntry struct {
     Grupo        string
     Creacion     string
     Modificacion string
+    Size         int32
 }
 
-func ListDirectoryFS(id, path string) ([]DirEntry, error) {
-    f, sb, _, err := GetFileSystemByID(id)
+func ListaCarpetasFS(id, path string) ([]CarpetaEntrada, error) {
+    f, sb, _, err := SistemaArchivos_ID(id)
     if err != nil {
         return nil, err
     }
     defer f.Close()
 
-    _, ino, ok := resolvePath(f, sb, path)
+    _, ino, ok := Direccion(f, sb, path)
     if !ok {
         return nil, fmt.Errorf("ruta no encontrada: %s", path)
     }
-    if !isDir(ino) {
-        return nil, fmt.Errorf("no es un directorio: %s", path)
+    if !EsCarpeta(ino) {
+        return nil, fmt.Errorf("No es un directorio: %s", path)
     }
 
-    ents := listDir(f, sb, ino)
-    out := make([]DirEntry, 0, len(ents))
+    ents := ListaCarpetas(f, sb, ino)
+    out := make([]CarpetaEntrada, 0, len(ents))
     for name, idx := range ents {
-        child, ok := GetInode(f, sb, int(idx))
+        child, ok := ObtenerInodo(f, sb, int(idx))
         if !ok {
             continue
         }
         tipo := "Carpeta"
-        if isFile(child) {
+        if EsArchivo(child) {
             tipo = "Archivo"
         }
-        permisos := string([]byte{child.I_perm[0], child.I_perm[1], child.I_perm[2]})
-        de := DirEntry{
+        permisos := FormatearPermisos(child.I_perm)
+        de := CarpetaEntrada{
             Nombre:       name,
             Tipo:         tipo,
             Permisos:     permisos,
@@ -599,8 +581,34 @@ func ListDirectoryFS(id, path string) ([]DirEntry, error) {
             Grupo:        fmt.Sprintf("%d", child.I_gid),
             Creacion:     trimBytes(child.I_ctime[:]),
             Modificacion: trimBytes(child.I_mtime[:]),
+            Size:        child.I_s,
         }
         out = append(out, de)
     }
     return out, nil
+}
+
+func FormatearPermisos(p [3]byte) string {
+    var res [3]string
+    for i := 0; i < 3; i++ {
+        r := p[i]
+        var s string
+        if r&4 != 0 {
+            s += "r"
+        } else {
+            s += "-"
+        }
+        if r&2 != 0 {
+            s += "w"
+        } else {
+            s += "-"
+        }
+        if r&1 != 0 {
+            s += "x"
+        } else {
+            s += "-"
+        }
+        res[i] = s
+    }
+    return fmt.Sprintf("%s%s%s", res[0], res[1], res[2])
 }

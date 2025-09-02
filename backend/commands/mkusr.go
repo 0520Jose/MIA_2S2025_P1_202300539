@@ -7,10 +7,10 @@ import (
 )
 
 func Mkusr(args map[string]string) string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
-    if currentUser.Username != "root" {
+    if usuarioActual.Username != "root" {
         return "Error: Solo el usuario root puede ejecutar mkusr."
     }
 
@@ -35,7 +35,7 @@ func Mkusr(args map[string]string) string {
         return "Error: -grp excede 10 caracteres."
     }
 
-    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
@@ -53,11 +53,11 @@ func Mkusr(args map[string]string) string {
         return fmt.Sprintf("Error: El usuario '%s' ya existe.", user)
     }
 
-    nuevoID := NextID(contenido) // máximo ID entre G y U + 1
+    nuevoID := SiguienteID(contenido)
     nuevaLinea := fmt.Sprintf("%d,U,%s,%s,%s\n", nuevoID, grp, user, pass)
-    nuevoContenido := ensureTrailingNewline(contenido) + nuevaLinea
+    nuevoContenido := asegurarNuevaLineaFinal(contenido) + nuevaLinea
 
-    if err := EscribirUsersTxt(currentUser.PartitionID, nuevoContenido); err != nil {
+    if err := EscribirUsersTxt(usuarioActual.PartitionID, nuevoContenido); err != nil {
         return "Error al escribir users.txt: " + err.Error()
     }
 
@@ -106,7 +106,7 @@ func UsuarioExisteActivo(contenido, usuario string) bool {
     return false
 }
 
-func NextID(contenido string) int {
+func SiguienteID(contenido string) int {
     maxID := 0
     for _, l := range strings.Split(contenido, "\n") {
         l = strings.TrimSpace(l)
@@ -114,11 +114,12 @@ func NextID(contenido string) int {
             continue
         }
         p := strings.Split(l, ",")
-        if len(p) < 2 {
+        if len(p) < 5 {
             continue
         }
         idStr := strings.TrimSpace(p[0])
-        if idStr == "0" {
+        tipo := strings.TrimSpace(p[1])
+        if tipo != "U" || idStr == "0" {
             continue
         }
         if id, err := strconv.Atoi(idStr); err == nil && id > maxID {
@@ -128,7 +129,7 @@ func NextID(contenido string) int {
     return maxID + 1
 }
 
-func ensureTrailingNewline(s string) string {
+func asegurarNuevaLineaFinal(s string) string {
     if s == "" {
         return ""
     }

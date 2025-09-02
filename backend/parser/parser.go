@@ -9,7 +9,7 @@ import (
     "errors"
 )
 
-var currentUser *structs.Usuario
+var usuarioActual *structs.Usuario
 
 func LeerUsersTxt(ruta string) ([]structs.Grupo, []structs.Usuario, error) {
     data, err := os.ReadFile(ruta)
@@ -58,8 +58,8 @@ func LeerArchivo(partitionID, filePath string) (string, error) {
         return "", errors.New("partición no montada")
     }
 
-    if currentUser == nil {
-        return "", errors.New("no hay usuario logueado")
+    if usuarioActual == nil {
+        return "", errors.New("No hay usuario logueado")
     }
 
     if strings.TrimPrefix(filePath, "/") == "users.txt" {
@@ -70,13 +70,13 @@ func LeerArchivo(partitionID, filePath string) (string, error) {
 }
 
 func SetCurrentUser(user *structs.Usuario) {
-    currentUser = user
+    usuarioActual = user
 }
 
 func GetCurrentUser() *structs.Usuario {
-    return currentUser
+    return usuarioActual
 }
 
 func ClearCurrentUser() {
-    currentUser = nil
+    usuarioActual = nil
 }

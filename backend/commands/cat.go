@@ -148,9 +148,9 @@ func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, e
         }
         if i < lastIdx {
             if ino.I_type[0] != 0 {
-                return -1, fmt.Errorf("no es un directorio")
+                return -1, fmt.Errorf("No es un directorio")
             }
-            if !hasPerm(&ino, permExec) {
+            if !Permisos(&ino, permExec) {
                 return -1, fmt.Errorf("permiso denegado al recorrer directorio")
             }
         }
@@ -191,9 +191,9 @@ func readFileContent(f *os.File, sb *structs.SuperBloque, inoIdx int32) (string,
         return "", err
     }
     if ino.I_type[0] != 1 {
-        return "", fmt.Errorf("no es un archivo")
+        return "", fmt.Errorf("No es un archivo")
     }
-    if !hasPerm(&ino, permRead) {
+    if !Permisos(&ino, permRead) {
         return "", fmt.Errorf("permiso denegado para leer el archivo")
     }
     var buf []byte

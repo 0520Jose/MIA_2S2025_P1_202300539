@@ -8,29 +8,29 @@ const (
     permExec  = 1
 )
 
-func isRoot() bool {
-    return currentUser != nil && currentUser.Username == "root"
+func EsRoot() bool {
+    return usuarioActual != nil && usuarioActual.Username == "root"
 }
 
-func inodeCategory(ino *structs.Inodo) int {
-    if currentUser == nil {
+func CategoriaInodo(ino *structs.Inodo) int {
+    if usuarioActual == nil {
         return 2
     }
-    if int(ino.I_uid) == currentUser.UID {
+    if int(ino.I_uid) == usuarioActual.UID {
         return 0
     }
-    if int(ino.I_gid) == currentUser.GID {
+    if int(ino.I_gid) == usuarioActual.GID {
         return 1
     }
     return 2
 }
 
-func hasPerm(ino *structs.Inodo, need int) bool {
-    if isRoot() {
+func Permisos(ino *structs.Inodo, need int) bool {
+    if EsRoot() {
         return true
     }
     var d byte
-    switch inodeCategory(ino) {
+    switch CategoriaInodo(ino) {
     case 0:
         d = ino.I_perm[0]
     case 1:

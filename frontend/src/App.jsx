@@ -61,6 +61,7 @@ function App() {
           <button onClick={handleChooseFileClick}>Elegir archivo</button>
           <button onClick={ejecutarComandos}>Ejecutar</button>
           <button onClick={handleClear}>Limpiar</button>
+          <div className='titulo'><div>GoDisk</div></div>
         </div>
         <div className='ioWrapper'>
           <div className='entradaComandos'>

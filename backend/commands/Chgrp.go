@@ -6,10 +6,10 @@ import (
 )
 
 func Chgrp(args map[string]string) string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
-    if currentUser.Username != "root" {
+    if usuarioActual.Username != "root" {
         return "Error: Solo el usuario root puede ejecutar chgrp."
     }
 
@@ -28,7 +28,7 @@ func Chgrp(args map[string]string) string {
         return "Error: -grp excede 10 caracteres."
     }
 
-    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
     if err != nil {
         return fmt.Errorf("Error: %v", err).Error()
     }
@@ -76,8 +76,8 @@ func Chgrp(args map[string]string) string {
         return fmt.Sprintf("Error: No se pudo actualizar el usuario '%s'.", user)
     }
 
-    nuevoContenido := ensureTrailingNewline(strings.Join(lineas, "\n"))
-    if err := EscribirUsersTxt(currentUser.PartitionID, nuevoContenido); err != nil {
+    nuevoContenido := asegurarNuevaLineaFinal(strings.Join(lineas, "\n"))
+    if err := EscribirUsersTxt(usuarioActual.PartitionID, nuevoContenido); err != nil {
         return "Error al escribir users.txt: " + err.Error()
     }
 

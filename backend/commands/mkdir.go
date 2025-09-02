@@ -8,7 +8,7 @@ import (
 )
 
 func Mkdir(params map[string]string) string {
-    if currentUser == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
     rawPath, ok := params["-path"]
@@ -40,12 +40,12 @@ func Mkdir(params map[string]string) string {
         return "Error: nombre de carpeta excede 12 caracteres."
     }
 
-    disk, sb, err := CargarSistemaEXT2(currentUser.PartitionID)
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
-    pm := getMountByID(currentUser.PartitionID)
+    pm := getMountByID(usuarioActual.PartitionID)
     if pm == nil {
         return "Error: partición no montada."
     }
@@ -59,7 +59,7 @@ func Mkdir(params map[string]string) string {
     if err != nil {
         return "Error: " + err.Error()
     }
-    if !hasPerm(&dirPadre, permWrite) {
+    if !Permisos(&dirPadre, permWrite) {
         return "Error: permiso denegado en carpeta padre."
     }
 
@@ -96,8 +96,8 @@ func createDirectoryWithPerm(f *os.File, sb *structs.SuperBloque, parentIno int3
     }
 
     var ino structs.Inodo
-    ino.I_uid = int32(currentUser.UID)
-    ino.I_gid = int32(currentUser.GID)
+    ino.I_uid = int32(usuarioActual.UID)
+    ino.I_gid = int32(usuarioActual.GID)
     ino.I_s = 0
     t := fecha17()
     copy(ino.I_atime[:], t)

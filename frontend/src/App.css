@@ -126,3 +126,15 @@ h3 {
     font-size: 1.1rem;
   }
 }
+
+.titulo {
+  font-size: 41px;
+  font-weight: 900;
+  width: 800px;
+  height: fit-content;
+  height: auto;
+  display: flex;
+  justify-content: right;
+  padding-right: 2%;
+  box-sizing: border-box;
+}

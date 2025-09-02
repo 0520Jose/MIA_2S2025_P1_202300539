@@ -7,7 +7,7 @@ func ExecuteCommand(fullCommand string) string {
     if len(tokens) == 0 {
         return "Comando vacío"
     }
-    command := tokens[0]
+    command := strings.ToLower(tokens[0])
     args := parseArgs(tokens[1:])
 
     switch command {

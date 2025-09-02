@@ -5,7 +5,7 @@ import (
     "strings"
 )
 
-func limpiarRuta(ruta string) (string, error) {
+func LimpiarRuta(ruta string) (string, error) {
     ruta = strings.TrimSpace(ruta)
 
     if len(ruta) == 0 {

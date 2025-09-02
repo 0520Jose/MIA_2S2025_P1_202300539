@@ -53,7 +53,7 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
     _ = json.NewEncoder(w).Encode(map[string]string{"salida": fullOutput.String()})
 }
 
-func StartAPIServer(port string) {
+func IniciarAPIServer(port string) {
     http.HandleFunc("/execute", executeHandler)
 
     log.Println("Iniciando el servidor API en el puerto", port)

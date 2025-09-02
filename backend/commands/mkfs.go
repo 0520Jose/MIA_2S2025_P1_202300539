@@ -136,11 +136,10 @@ func Mkfs(params map[string]string) string {
         return "Error al escribir bm bloques: " + err.Error()
     }
 
-    // Inodo raíz (0)
     var inoRoot structs.Inodo
     inoRoot.I_uid = 1
     inoRoot.I_gid = 1
-    inoRoot.I_s = int32(binary.Size(structs.BCarpeta{})) // FIX: tamaño del bloque carpeta
+    inoRoot.I_s = int32(binary.Size(structs.BCarpeta{}))
     copy(inoRoot.I_atime[:], fecha17())
     copy(inoRoot.I_ctime[:], fecha17())
     copy(inoRoot.I_mtime[:], fecha17())
@@ -151,26 +150,41 @@ func Mkfs(params map[string]string) string {
     inoRoot.I_type[0] = 0
     inoRoot.I_perm = [3]byte{7, 5, 5}
 
-    // Inodo users.txt (1)
     contenidoUsers := "1,G,root\n1,U,root,root,123\n"
     var inoUsers structs.Inodo
     inoUsers.I_uid = 1
     inoUsers.I_gid = 1
-    maxSizeUsers := int32(binary.Size(structs.BArchivo{}))
-    if int32(len(contenidoUsers)) > maxSizeUsers {
-        inoUsers.I_s = maxSizeUsers // FIX: limitar al tamaño real del bloque
-    } else {
-        inoUsers.I_s = int32(len(contenidoUsers))
-    }
+    inoUsers.I_s = int32(len(contenidoUsers))
     copy(inoUsers.I_atime[:], fecha17())
     copy(inoUsers.I_ctime[:], fecha17())
     copy(inoUsers.I_mtime[:], fecha17())
     for i := range inoUsers.I_block {
         inoUsers.I_block[i] = -1
     }
-    inoUsers.I_block[0] = 1
+
+    blockSize = int32(binary.Size(structs.BArchivo{}))
+    numBlocks := (len(contenidoUsers) + int(blockSize) - 1) / int(blockSize)
+    for i := 0; i < numBlocks && i < len(inoUsers.I_block); i++ {
+        inoUsers.I_block[i] = int32(i + 1)
+    }
     inoUsers.I_type[0] = 1
     inoUsers.I_perm = [3]byte{6, 6, 4}
+
+    for i := 0; i < numBlocks && i < len(inoUsers.I_block); i++ {
+        start := i * int(blockSize)
+        end := start + int(blockSize)
+        if end > len(contenidoUsers) {
+            end = len(contenidoUsers)
+        }
+        var bUsers structs.BArchivo
+        copy(bUsers.B_content[:], []byte(contenidoUsers[start:end]))
+        if _, err := f.Seek(int64(sb.S_block_start)+int64(inoUsers.I_block[i])*int64(sb.S_block_s), 0); err != nil {
+            return "Error al posicionar bloque users.txt: " + err.Error()
+        }
+        if err := binary.Write(f, binary.LittleEndian, &bUsers); err != nil {
+            return "Error al escribir bloque users.txt: " + err.Error()
+        }
+    }
 
     if _, err := f.Seek(int64(sb.S_inode_start)+0*int64(sb.S_inode_s), 0); err != nil {
         return "Error al posicionar inodo raíz: " + err.Error()

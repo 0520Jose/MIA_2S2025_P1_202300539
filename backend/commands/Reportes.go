@@ -11,6 +11,9 @@ import (
     "encoding/binary"
     "sort"
     //"html"
+	"time"
+    "bytes"
+    //"unicode"
 )
 
 func Rep(params map[string]string) string {
@@ -36,8 +39,8 @@ func Rep(params map[string]string) string {
 		return generarReporteDISK(path, id)
 	case "inode":
 		return generarReporteInode(path, id)
-	//case "block":
-	//	return generarReporteBlock(path, id)
+	case "block":
+		return generarReporteBlock(path, id)
 	case "bm_inode":
 		return generarReporteBMInode(path, id)
 	case "bm_block":
@@ -49,14 +52,17 @@ func Rep(params map[string]string) string {
 	case "file":
 		return generarReporteFile(path, id, params["-path_file_ls"])
 	case "ls":
-		return generarReporteLS(path, id, params["-path_file_ls"])
+		if err := generarReporteLS(id, params["-path_file_ls"], path); err != nil {
+            return fmt.Sprintf("Error: %v", err)
+        }
+		return fmt.Sprintf("Reporte ls generado en %s", path)
 	default:
 		return fmt.Sprintf("Error: reporte %s no válido", name)
 	}
 }
 
 func generarReporteMBR(path, id string) string {
-    disk, _, mbr, err := structs.GetFileSystemByID(id)
+    disk, _, mbr, err := structs.SistemaArchivos_ID(id)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
@@ -154,11 +160,6 @@ func generarArchivoDOT(dot, path string) string {
         return fmt.Sprintf("Error escribiendo DOT: %v", err)
     }
 
-    // Para depurar: imprimir el contenido del DOT
-    fmt.Println("=== CONTENIDO DOT ===")
-    fmt.Println(dot)
-    fmt.Println("=== FIN DOT ===")
-
     format := strings.TrimPrefix(filepath.Ext(path), ".")
     cmd := exec.Command("dot", "-T"+format, dotFile, "-o", path)
     output, err := cmd.CombinedOutput()
@@ -170,33 +171,28 @@ func generarArchivoDOT(dot, path string) string {
 }
 
 func generarReporteDISK(path, id string) string {
-	disk, _, mbr, err := structs.GetFileSystemByID(id)
+	disk, _, mbr, err := structs.SistemaArchivos_ID(id)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
 	defer disk.Close()
 
-	// Obtener información del archivo para el nombre del disco
-	diskName := "Disco1.dsk" // Puedes extraer esto del path si es necesario
+	nombreDisco := structs.NombreDisco_ID(id)
 	
 	dot := "digraph G {\n"
 	dot += "node [shape=plaintext]\n"
 	dot += "ReporteDISK [label=<\n"
 	dot += "<table border='1' cellborder='1' cellspacing='0'>\n"
 	
-	// Título del disco
-	dot += fmt.Sprintf("<tr><td colspan='20' bgcolor='#E8F4FD'><b>%s</b></td></tr>\n", diskName)
+	dot += fmt.Sprintf("<tr><td colspan='20' bgcolor='#E8F4FD'><b>%s</b></td></tr>\n", nombreDisco)
 	
-	// Fila principal
 	dot += "<tr>"
 	
-	// MBR (siempre presente)
 	dot += "<td bgcolor='#D1ECF1' height='80'>MBR</td>"
 	
 	total := float64(mbr.Mbr_tamano)
-	sizeofMBR := int32(1024) // Tamaño típico del MBR
+	sizeofMBR := int32(1024)
 	
-	// Ordenar particiones por posición
 	var particiones []structs.Partition
 	for _, part := range mbr.Mbr_partitions {
 		if part.Part_s > 0 {
@@ -204,7 +200,6 @@ func generarReporteDISK(path, id string) string {
 		}
 	}
 	
-	// Ordenar por posición de inicio
 	sort.Slice(particiones, func(i, j int) bool {
 		return particiones[i].Part_start < particiones[j].Part_start
 	})
@@ -212,7 +207,6 @@ func generarReporteDISK(path, id string) string {
 	lastEnd := sizeofMBR
 	
 	for _, part := range particiones {
-		// Verificar si hay espacio libre antes de esta partición
 		if part.Part_start > lastEnd {
 			freeSpace := part.Part_start - lastEnd
 			porcentajeLibre := float64(freeSpace) / total * 100
@@ -220,30 +214,24 @@ func generarReporteDISK(path, id string) string {
 		}
 		
 		porcentaje := float64(part.Part_s) / total * 100
-		//partName := strings.Trim(string(part.Part_name[:]), "\x00")
 		
 		if part.Part_type == 'e' || part.Part_type == 'E' {
-			// Partición extendida - crear subtabla
 			dot += "<td bgcolor='#FFE5B4' height='80'>"
 			dot += "<table border='1' cellborder='1' cellspacing='0' style='width:100%;'>"
 			dot += fmt.Sprintf("<tr><td colspan='10' bgcolor='#FFD93D'><b>Extendida</b></td></tr>")
 			dot += "<tr>"
-			
-			// Procesar particiones lógicas dentro de la extendida
 			logicas := obtenerParticionesLogicasParaDisk(disk, part.Part_start, part.Part_s, total)
 			dot += logicas
 			
 			dot += "</tr></table>"
 			dot += "</td>"
 		} else {
-			// Partición primaria
 			dot += fmt.Sprintf("<td bgcolor='#C8E6C9' height='80'>Primaria<br/>%.0f%% del disco</td>", porcentaje)
 		}
 		
 		lastEnd = part.Part_start + part.Part_s
 	}
 	
-	// Espacio libre al final
 	if lastEnd < int32(total) {
 		freeSpace := int32(total) - lastEnd
 		porcentajeLibre := float64(freeSpace) / total * 100
@@ -252,14 +240,12 @@ func generarReporteDISK(path, id string) string {
 	
 	dot += "</tr></table>\n>];\n}\n"
 
-	// Escribir archivo DOT
 	dotFile := strings.TrimSuffix(path, filepath.Ext(path)) + ".dot"
 	err = os.WriteFile(dotFile, []byte(dot), 0644)
 	if err != nil {
 		return fmt.Sprintf("Error escribiendo DOT: %v", err)
 	}
 
-	// Generar imagen
 	format := strings.TrimPrefix(filepath.Ext(path), ".")
 	cmd := exec.Command("dot", "-T"+format, dotFile, "-o", path)
 	err = cmd.Run()
@@ -321,7 +307,7 @@ func obtenerParticionesLogicasParaDisk(disk *os.File, startExtendida int32, size
 }
 
 func generarReporteInode(path, id string) string {
-	disk, sb, _, err := structs.GetSuperBlockByID(id)
+	disk, sb, _, err := structs.SuperBloque_ID(id)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -335,7 +321,7 @@ func generarReporteInode(path, id string) string {
 	var conexiones string
 
 	for i := 0; i < int(sb.S_inodes_count); i++ {
-		inode, usado := structs.GetInode(disk, sb, i)
+		inode, usado := structs.ObtenerInodo(disk, sb, i)
 		if usado {
 			inodosUsados = append(inodosUsados, i)
 
@@ -369,7 +355,6 @@ func generarReporteInode(path, id string) string {
 		return fmt.Sprintf("Error escribiendo DOT: %v", err)
 	}
 	
-	// Generar imagen
 	format := strings.TrimPrefix(filepath.Ext(path), ".")
 	cmd := exec.Command("dot", "-T"+format, dotFile, "-o", path)
 	err = cmd.Run()
@@ -380,201 +365,247 @@ func generarReporteInode(path, id string) string {
 	return fmt.Sprintf("Reporte Inode generado en %s", path)
 }
 
-/*
-func generarReporteBlock(path, id string) string {
-	disk, sb, _, err := structs.GetSuperBlockByID(id)
-	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
-	}
-	defer disk.Close()
-	
-	dot := "digraph G {\n"
-	dot += "node [shape=plaintext]\n"
-	dot += "rankdir=LR\n" // Organizar horizontalmente
-	
-	var bloquesUsados []int
-	var conexiones string
-	
-	// Crear mapa de tipos de bloques basado en inodos
-	tiposBloque := make(map[int]string)
-	for i := 0; i < int(sb.S_inodes_count); i++ {
-		inode, usado := structs.GetInode(disk, sb, i)
-		if usado {
-			isDirectory := len(inode.I_type) > 0 && inode.I_type[0] == 0
-			
-			// Revisar todos los bloques del inodo
-			for j := 0; j < 15; j++ {
-				blockIdx := inode.I_block[j]
-				if blockIdx > 0 {
-					if isDirectory {
-						tiposBloque[int(blockIdx)] = "carpeta"
-					} else {
-						// Para archivos, revisar si es bloque de datos o apuntadores
-						if j < 12 {
-							tiposBloque[int(blockIdx)] = "archivo"
-						} else {
-							tiposBloque[int(blockIdx)] = "apuntadores"
-						}
-					}
-				}
-			}
-		}
-	}
-	
-	// Buscar todos los bloques usados
-	for i := 0; i < int(sb.S_blocks_count); i++ {
-		block, usado := structs.GetBlock(disk, sb, i)
-		if usado {
-			bloquesUsados = append(bloquesUsados, i)
-			
-			// Determinar tipo de bloque usando el mapa
-			tipoBloque, contenido := determinarTipoBloquePorInodo(disk, sb, block, i, tiposBloque[i])
-			
-			// Crear nodo para cada bloque
-			dot += fmt.Sprintf("Block%d [label=<\n", i)
-			dot += "<table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n"
-			dot += fmt.Sprintf("<tr><td colspan='2' bgcolor='#E8F4FD'><b>%s</b></td></tr>\n", tipoBloque)
-			
-			// Contenido específico según el tipo de bloque
-			dot += contenido
-			
-			dot += "</table>\n>];\n"
-		}
-	}
-	
-	// Crear conexiones entre bloques (flechas como en la imagen)
-	for i := 0; i < len(bloquesUsados)-1; i++ {
-		conexiones += fmt.Sprintf("Block%d -> Block%d [color=\"#4A90E2\" style=\"solid\"];\n", 
-			bloquesUsados[i], bloquesUsados[i+1])
-	}
-	
-	dot += conexiones
-	dot += "}\n"
-	
-	// Escribir archivo DOT
-	dotFile := strings.TrimSuffix(path, filepath.Ext(path)) + ".dot"
-	err = os.WriteFile(dotFile, []byte(dot), 0644)
-	if err != nil {
-		return fmt.Sprintf("Error escribiendo DOT: %v", err)
-	}
-	
-	// Generar imagen
-	format := strings.TrimPrefix(filepath.Ext(path), ".")
-	cmd := exec.Command("dot", "-T"+format, dotFile, "-o", path)
-	err = cmd.Run()
-	if err != nil {
-		return fmt.Sprintf("Error ejecutando Graphviz: %v", err)
-	}
-	
-	return fmt.Sprintf("Reporte Block generado en %s", path)
-}
+func generarReporteBlock(path string, id string) string {
+    f, sb, _, err := structs.SistemaArchivos_ID(id)
+    if err != nil {
+        return fmt.Sprintf("Error obteniendo FS: %v", err)
+    }
+    defer f.Close()
 
-// Función para determinar el tipo de bloque y generar su contenido
-func determinarTipoBloque(block interface{}, indice int) (string, string) {
-	switch b := block.(type) {
-	case *structs.BCarpeta:
-		return fmt.Sprintf("Bloque Carpeta %d", indice), generarContenidoCarpeta(b)
-	case *structs.BArchivo:
-		return fmt.Sprintf("Bloque Archivo %d", indice), generarContenidoArchivo(b)
-	case *structs.BApuntadores:
-		return fmt.Sprintf("Bloque Apuntadores %d", indice), generarContenidoApuntadores(b)
-	default:
-		// Si no se puede determinar el tipo, mostrar contenido genérico
-		return fmt.Sprintf("Bloque %d", indice), "<tr bgcolor='white'><td colspan='2'>Contenido no identificado</td></tr>\n"
-	}
-}
+    dir := filepath.Dir(path)
+    base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
-// Generar contenido para bloque de carpeta
-func generarContenidoCarpeta(carpeta *structs.BCarpeta) string {
-	var contenido string
-	contenido += "<tr bgcolor='white'><td><b>b_name</b></td><td><b>b_inodo</b></td></tr>\n"
-	
-	for _, content := range carpeta.B_content {
-		name := strings.Trim(string(content.B_name[:]), "\x00")
-		if name != "" {
-			contenido += fmt.Sprintf("<tr bgcolor='white'><td>%s</td><td>%d</td></tr>\n", name, content.B_inodo)
-		}
-	}
-	
-	return contenido
-}
+    if err := os.MkdirAll(dir, 0755); err != nil {
+        return fmt.Sprintf("Error creando directorio %s: %v", dir, err)
+    }
 
-// Generar contenido para bloque de archivo
-func generarContenidoArchivo(archivo *structs.BArchivo) string {
-	var contenido string
-	
-	// Mostrar contenido del archivo como texto continuo
-	data := strings.Trim(string(archivo.B_content[:]), "\x00")
-	if data != "" {
-		// Dividir en líneas para mejor visualización
-		contenido += fmt.Sprintf("<tr bgcolor='white'><td colspan='2'>%s</td></tr>\n", 
-			html.EscapeString(data))
-	} else {
-		contenido += "<tr bgcolor='white'><td colspan='2'>Archivo vacío</td></tr>\n"
-	}
-	
-	return contenido
-}
+    dotPath := filepath.Join(dir, base+".dot")
+    imgPath := filepath.Join(dir, base+".jpg")
 
-// Generar contenido para bloque de apuntadores
-func generarContenidoApuntadores(apuntadores *structs.BApuntadores) string {
-	var contenido string
-	var valores []string
-	
-	for _, pointer := range apuntadores.B_pointers {
-		valores = append(valores, fmt.Sprintf("%d", pointer))
-	}
-	
-	// Mostrar apuntadores en formato similar a la imagen
-	// Dividir en múltiples líneas para mejor visualización
-	lineasPorFila := 6
-	for i := 0; i < len(valores); i += lineasPorFila {
-		fin := i + lineasPorFila
-		if fin > len(valores) {
-			fin = len(valores)
-		}
-		linea := strings.Join(valores[i:fin], ", ")
-		contenido += fmt.Sprintf("<tr bgcolor='white'><td colspan='2'>%s,</td></tr>\n", linea)
-	}
-	
-	return contenido
-}
+    var b strings.Builder
+    b.WriteString("digraph G {\n")
+    b.WriteString("  node [shape=plaintext fontname=\"Arial\"];\n")
+    b.WriteString("  rankdir=LR;\n")
+    b.WriteString("  bgcolor=transparent;\n\n")
 
-func determinarTipoBloquePorInodo(disk *os.File, sb *structs.SuperBloque, block interface{}, indice int, tipoEsperado string) (string, string) {
-    // Si tenemos información del tipo esperado desde el mapa de inodos
-    if tipoEsperado != "" {
-        switch tipoEsperado {
+    bitmapBloques := structs.GetBitmapBlocks(f, sb)
+    if bitmapBloques == nil {
+        return "Error: No se pudo obtener el bitmap de bloques"
+    }
+
+    bloquesUsados := obtenerBloquesUsados(bitmapBloques, int(sb.S_blocks_count))
+
+    connections := make([]string, 0)
+    
+    for _, blockNum := range bloquesUsados {
+        tipoBloque := determinarTipoBloque(f, sb, blockNum)
+        
+        switch tipoBloque {
         case "carpeta":
-            if carpeta, ok := block.(*structs.BCarpeta); ok {
-                return fmt.Sprintf("Bloque Carpeta %d", indice), generarContenidoCarpeta(carpeta)
+            bc, ok := structs.LeerBloqueCarptea(f, sb, int32(blockNum))
+            if ok {
+                b.WriteString(generarTablaCarpeta(int32(blockNum), &bc))
             }
+            
         case "archivo":
-            if archivo, ok := block.(*structs.BArchivo); ok {
-                return fmt.Sprintf("Bloque Archivo %d", indice), generarContenidoArchivo(archivo)
+            ba, ok := structs.LeerBloqueArchivo(f, sb, int32(blockNum))
+            if ok {
+                b.WriteString(generarTablaArchivo(int32(blockNum), &ba))
             }
+            
         case "apuntadores":
-            if apuntadores, ok := block.(*structs.BApuntadores); ok {
-                return fmt.Sprintf("Bloque Apuntadores %d", indice), generarContenidoApuntadores(apuntadores)
+            if bp := leerBloqueApuntadores(f, sb, blockNum); bp != nil {
+                b.WriteString(generarTablaApuntadores(int32(blockNum), bp))
+                
+                for _, pointer := range bp.B_pointers {
+                    if pointer != -1 && pointer >= 0 && int(pointer) < int(sb.S_blocks_count) {
+                        if esBloqueUsado(bitmapBloques, int(pointer)) {
+                            connections = append(connections, 
+                                fmt.Sprintf("  Block%d -> Block%d;\n", blockNum, pointer))
+                            break
+                        }
+                    }
+                }
             }
         }
     }
-    
-    // Si no tenemos tipo esperado, intentar determinar por el contenido del bloque
-    return determinarTipoBloque(block, indice)
-}*/
 
+    if len(connections) > 0 {
+        b.WriteString("\n  // Conexiones entre bloques\n")
+        for _, conn := range connections {
+            b.WriteString(conn)
+        }
+    }
+
+    b.WriteString("}\n")
+
+    if err := os.WriteFile(dotPath, []byte(b.String()), 0644); err != nil {
+        return fmt.Sprintf("Error creando archivo DOT: %v", err)
+    }
+
+    cmd := exec.Command("dot", "-Tjpg", dotPath, "-o", imgPath)
+    if err := cmd.Run(); err != nil {
+        return fmt.Sprintf("Error generando imagen JPG: %v", err)
+    }
+
+    return fmt.Sprintf("Reporte generado: %s", imgPath)
+}
+
+func obtenerBloquesUsados(bitmap []byte, totalBloques int) []int {
+    bloquesUsados := make([]int, 0)
+    
+    for i := 0; i < totalBloques && i < len(bitmap); i++ {
+        if bitmap[i] != 0 {
+            bloquesUsados = append(bloquesUsados, i)
+        }
+    }
+    
+    return bloquesUsados
+}
+
+func esBloqueUsado(bitmap []byte, blockNum int) bool {
+    return blockNum < len(bitmap) && bitmap[blockNum] != 0
+}
+
+func determinarTipoBloque(f *os.File, sb *structs.SuperBloque, blockNum int) string {
+    bloque, ok := structs.ObtenerBloque(f, sb, blockNum)
+    if !ok {
+        return "desconocido"
+    }
+    
+    data := bloque.Data[:]
+    
+    var potentialsPointers []int32
+    for i := 0; i < 64 && i < len(data)-3; i += 4 {
+        val := int32(data[i]) | int32(data[i+1])<<8 | int32(data[i+2])<<16 | int32(data[i+3])<<24
+        potentialsPointers = append(potentialsPointers, val)
+    }
+    
+    validPointers := 0
+    for _, ptr := range potentialsPointers {
+        if (ptr >= 0 && ptr < sb.S_blocks_count) || ptr == -1 {
+            validPointers++
+        }
+    }
+    
+    if validPointers >= len(potentialsPointers)/2 && validPointers >= 4 {
+        return "apuntadores"
+    }
+
+    var bc structs.BCarpeta
+    rdr := bytes.NewReader(data)
+    if binary.Read(rdr, binary.LittleEndian, &bc) == nil {
+        validEntries := 0
+        for _, content := range bc.B_content {
+            nombre := strings.TrimRight(string(content.B_name[:]), "\x00")
+            if len(nombre) > 0 && len(nombre) <= 11 && esNombreValido(nombre) && 
+               content.B_inodo >= 0 && content.B_inodo < sb.S_inodes_count {
+                validEntries++
+            }
+        }
+        if validEntries > 0 {
+            return "carpeta"
+        }
+    }
+    
+    return "archivo"
+}
+
+func esNombreValido(nombre string) bool {
+    for _, c := range nombre {
+        if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+             (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == ' ') {
+            return false
+        }
+    }
+    return true
+}
+
+func leerBloqueApuntadores(f *os.File, sb *structs.SuperBloque, blockNum int) *structs.BApuntadores {
+    bloque, ok := structs.ObtenerBloque(f, sb, blockNum)
+    if !ok {
+        return nil
+    }
+    
+    var bp structs.BApuntadores
+    rdr := bytes.NewReader(bloque.Data[:])
+    if err := binary.Read(rdr, binary.LittleEndian, &bp); err != nil {
+        return nil
+    }
+    
+    return &bp
+}
+
+func generarTablaCarpeta(num int32, carpeta *structs.BCarpeta) string {
+    var tabla strings.Builder
+    tabla.WriteString(fmt.Sprintf("  Block%d [label=<\n", num))
+    tabla.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n")
+    tabla.WriteString(fmt.Sprintf("      <tr><td colspan='2' bgcolor='#4CAF50'><font color='white'><b>Bloque Carpeta %d</b></font></td></tr>\n", num))
+    tabla.WriteString("      <tr><td bgcolor='#E8F5E8'><b>b_name</b></td><td bgcolor='#E8F5E8'><b>b_inodo</b></td></tr>\n")
+
+    for _, c := range carpeta.B_content {
+        nombre := strings.TrimRight(string(c.B_name[:]), "\x00")
+        if nombre != "" {
+            tabla.WriteString(fmt.Sprintf("      <tr><td>%s</td><td>%d</td></tr>\n", nombre, c.B_inodo))
+        } else {
+            tabla.WriteString("      <tr><td></td><td></td></tr>\n")
+        }
+    }
+
+    tabla.WriteString("    </table>>];\n\n")
+    return tabla.String()
+}
+
+func generarTablaArchivo(num int32, archivo *structs.BArchivo) string {
+    contenido := strings.TrimRight(string(archivo.B_content[:]), "\x00")
+    
+    if len(contenido) > 50 {
+        contenido = contenido[:47] + "..."
+    }
+    
+    contenido = strings.ReplaceAll(contenido, "&", "&amp;")
+    contenido = strings.ReplaceAll(contenido, "<", "&lt;")
+    contenido = strings.ReplaceAll(contenido, ">", "&gt;")
+    contenido = strings.ReplaceAll(contenido, "\"", "&quot;")
+
+    var tabla strings.Builder
+    tabla.WriteString(fmt.Sprintf("  Block%d [label=<\n", num))
+    tabla.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n")
+    tabla.WriteString(fmt.Sprintf("      <tr><td bgcolor='#2196F3'><font color='white'><b>Bloque Archivo %d</b></font></td></tr>\n", num))
+    tabla.WriteString(fmt.Sprintf("      <tr><td align='left'><font face='monospace' point-size='10'>%s</font></td></tr>\n", contenido))
+    tabla.WriteString("    </table>>];\n\n")
+
+    return tabla.String()
+}
+
+func generarTablaApuntadores(num int32, apuntadores *structs.BApuntadores) string {
+    var tabla strings.Builder
+    tabla.WriteString(fmt.Sprintf("  Block%d [label=<\n", num))
+    tabla.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n")
+    tabla.WriteString(fmt.Sprintf("      <tr><td bgcolor='#FF9800'><font color='white'><b>Bloque Apuntadores %d</b></font></td></tr>\n", num))
+
+    var valores []string
+    for _, pointer := range apuntadores.B_pointers {
+        valores = append(valores, fmt.Sprintf("%d", pointer))
+    }
+    
+    contenidoApuntadores := strings.Join(valores, ", ")
+    tabla.WriteString(fmt.Sprintf("      <tr><td align='left'><font face='monospace' point-size='9'>%s</font></td></tr>\n", contenidoApuntadores))
+
+    tabla.WriteString("    </table>>];\n\n")
+    return tabla.String()
+}
 
 func generarReporteBMInode(path, id string) string {
-    disk, sb, _, err := structs.GetSuperBlockByID(id)
+    disk, sb, _, err := structs.SuperBloque_ID(id)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
 
-    bm := structs.GetBitmapInodes(disk, sb)
+    bm := structs.BitMapInodos(disk, sb)
     var contenido strings.Builder
     
-    // Agregar encabezado del reporte
     contenido.WriteString("BITMAP DE INODOS\n")
     contenido.WriteString("================\n\n")
     
@@ -585,16 +616,15 @@ func generarReporteBMInode(path, id string) string {
         }
     }
     
-    // Asegurar que termine con nueva línea si no es múltiplo de 20
     if len(bm)%20 != 0 {
         contenido.WriteString("\n")
     }
 
-    return writeTextFile(path, contenido.String())
+    return escribirTexto(path, contenido.String())
 }
 
 func generarReporteBMBlock(path, id string) string {
-    disk, sb, _, err := structs.GetSuperBlockByID(id)
+    disk, sb, _, err := structs.SuperBloque_ID(id)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
@@ -603,7 +633,6 @@ func generarReporteBMBlock(path, id string) string {
     bm := structs.GetBitmapBlocks(disk, sb)
     var contenido strings.Builder
     
-    // Agregar encabezado del reporte
     contenido.WriteString("BITMAP DE BLOQUES\n")
     contenido.WriteString("=================\n\n")
     
@@ -614,22 +643,21 @@ func generarReporteBMBlock(path, id string) string {
         }
     }
     
-    // Asegurar que termine con nueva línea si no es múltiplo de 20
     if len(bm)%20 != 0 {
         contenido.WriteString("\n")
     }
 
-    return writeTextFile(path, contenido.String())
+    return escribirTexto(path, contenido.String())
 }
 
 func generarReporteTree(path, id string) string {
-    disk, sb, _, err := structs.GetSuperBlockByID(id)
+    disk, sb, _, err := structs.SuperBloque_ID(id)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
 
-    dot := structs.GenerateTreeGraph(disk, sb, 50)
+    dot := structs.GenerarReporteArbol(disk, sb, 50)
 
     dotFile := strings.TrimSuffix(path, filepath.Ext(path)) + ".dot"
     err = os.WriteFile(dotFile, []byte(dot), 0644)
@@ -648,54 +676,161 @@ func generarReporteTree(path, id string) string {
 }
 
 func generarReporteSB(path, id string) string {
-    disk, sb, _, err := structs.GetSuperBlockByID(id)
+    disk, sb, _, err := structs.SuperBloque_ID(id)
     if err != nil {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
 
-    dot := "digraph G {\nnode [shape=plaintext]\nSB [label=<\n"
-    dot += "<table border='1' cellborder='1' cellspacing='0'>\n"
-    dot += "<tr><td colspan='2'><b>SUPERBLOQUE</b></td></tr>\n"
-    dot += fmt.Sprintf("<tr><td>s_inodes_count</td><td>%d</td></tr>\n", sb.S_inodes_count)
-    dot += fmt.Sprintf("<tr><td>s_blocks_count</td><td>%d</td></tr>\n", sb.S_blocks_count)
-    dot += fmt.Sprintf("<tr><td>s_free_blocks_count</td><td>%d</td></tr>\n", sb.S_free_blocks_count)
-    dot += fmt.Sprintf("<tr><td>s_free_inodes_count</td><td>%d</td></tr>\n", sb.S_free_inodes_count)
-    dot += fmt.Sprintf("<tr><td>s_mtime</td><td>%s</td></tr>\n", string(sb.S_mtime[:]))
-    dot += "</table>\n>];\n}\n"
+    var dot strings.Builder
+    dot.WriteString("digraph G {\nnode [shape=plaintext]\nSB [label=<\n")
+    dot.WriteString("<table border='1' cellborder='1' cellspacing='0'>\n")
+    dot.WriteString("<tr><td colspan='2' bgcolor='#1976d2'><font color='white'><b>Reporte de SUPERBLOQUE</b></font></td></tr>\n")
 
-    return "Superbloque generado correctamente"
+    nombreDisco := structs.NombreDisco_ID(id)
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_nombre_hd</font></td><td>%s</td></tr>\n", nombreDisco))
+
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_arbol_virtual_count</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_detalle_directorio_count</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_arbol_virtual_free</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_detalle_directorio_free</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_arbol_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_arbol_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_detalle_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_detalle_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_log</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_arbol_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_detalle_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_arbol_directorio</font></td><td>No implementado</td></tr>\n")
+    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_detalle_directorio</font></td><td>No implementado</td></tr>\n")
+
+
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_filesystem_type</font></td><td>%d</td></tr>\n", sb.S_filesystem_type))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_inodos_count</font></td><td>%d</td></tr>\n", sb.S_inodes_count))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_bloques_count</font></td><td>%d</td></tr>\n", sb.S_blocks_count))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_inodos_free</font></td><td>%d</td></tr>\n", sb.S_free_inodes_count))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_bloques_free</font></td><td>%d</td></tr>\n", sb.S_free_blocks_count))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_date_creacion</font></td><td>%s</td></tr>\n", strings.Trim(string(sb.S_mtime[:]), "\x00")))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_date_ultimo_montaje</font></td><td>%s</td></tr>\n", strings.Trim(string(sb.S_umtime[:]), "\x00")))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_montajes_count</font></td><td>%d</td></tr>\n", sb.S_mnt_count))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_magic_num</font></td><td>%d</td></tr>\n", sb.S_magic))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_inodo</font></td><td>%d</td></tr>\n", sb.S_inode_s))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_bloque</font></td><td>%d</td></tr>\n", sb.S_block_s))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_tabla_inodos</font></td><td>%d</td></tr>\n", sb.S_first_ino))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_bloques</font></td><td>%d</td></tr>\n", sb.S_first_blo))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_inodos</font></td><td>%d</td></tr>\n", sb.S_bm_inode_start))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_bloques</font></td><td>%d</td></tr>\n", sb.S_bm_block_start))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_inodos</font></td><td>%d</td></tr>\n", sb.S_inode_start))
+    dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bloques</font></td><td>%d</td></tr>\n", sb.S_block_start))
+
+    dot.WriteString("</table>\n>];\n}\n")
+    return generarArchivoDOT(dot.String(), path)
 }
 
 func generarReporteFile(path, id, filePath string) string {
-    contenido, err := structs.ReadFileFromFS(id, filePath)
+    contenido, err := structs.LeerArchivoDeFS(id, filePath)
     if err != nil {
         return fmt.Sprintf("Error leyendo archivo: %v", err)
     }
-    return writeTextFile(path, fmt.Sprintf("Archivo: %s\n\n%s", filePath, contenido))
-}
 
-func generarReporteLS(path, id, dirPath string) string {
-    listado, err := structs.ListDirectoryFS(id, dirPath)
-    if err != nil {
-        return fmt.Sprintf("Error listando: %v", err)
+    nombre := filepath.Base(filePath)
+    if contenido == "" {
+        contenido = "<Archivo vacío>"
     }
 
-    dot := "digraph G {\nnode [shape=plaintext]\nLS [label=<\n"
-    dot += "<table border='1' cellborder='1' cellspacing='0'>\n"
-    dot += "<tr><td><b>Nombre</b></td><td><b>Tipo</b></td><td><b>Permisos</b></td><td><b>Propietario</b></td><td><b>Grupo</b></td><td><b>Creación</b></td><td><b>Modificación</b></td></tr>\n"
+    reporte := fmt.Sprintf(
+        "REPORTE DE FILE\n================\n\nNombre: %s\nRuta: %s\nTamaño: %d bytes\n\nContenido:\n\n%s\n",
+        nombre,
+        filePath,
+        len(contenido),
+        contenido,
+    )
+
+    return escribirTexto(path, reporte)
+}
+
+func generarReporteLS(id, dirPath, outputPath string) error {
+    listado, err := structs.ListaCarpetasFS(id, dirPath)
+    if err != nil {
+        return fmt.Errorf("error al listar directorio: %v", err)
+    }
+
+    dot := `digraph G {
+    node [shape=plaintext]
+    ls [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
+    <TR>
+        <TD><B>Permisos</B></TD>
+        <TD><B>Propietario</B></TD>
+        <TD><B>Grupo</B></TD>
+        <TD><B>Tamaño (Bytes)</B></TD>
+        <TD><B>Fecha Creación</B></TD>
+        <TD><B>Hora Creación</B></TD>
+        <TD><B>Fecha Modificación</B></TD>
+        <TD><B>Hora Modificación</B></TD>
+        <TD><B>Tipo</B></TD>
+        <TD><B>Nombre</B></TD>
+    </TR>
+    `
 
     for _, f := range listado {
-        dot += fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
-            f.Nombre, f.Tipo, f.Permisos, f.Propietario, f.Grupo, f.Creacion, f.Modificacion)
+        size := fmt.Sprintf("%d", f.Size)
+
+        fechaCreacion := formatearFecha(f.Creacion)
+        horaCreacion := formatearHora(f.Creacion)
+
+        fechaMod := formatearFecha(f.Modificacion)
+        horaMod := formatearHora(f.Modificacion)
+
+        dot += fmt.Sprintf(
+            "    <TR><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD><TD>%s</TD></TR>\n",
+            f.Permisos, f.Propietario, f.Grupo, size,
+            fechaCreacion, horaCreacion,
+            fechaMod, horaMod,
+            f.Tipo, f.Nombre,
+        )
     }
 
-    dot += "</table>\n>];\n}\n"
+    dot += `</TABLE>
+    >];
+}`
 
-    return "Listado generado correctamente"
+    dotPath := outputPath + ".dot"
+    if err := os.WriteFile(dotPath, []byte(dot), 0644); err != nil {
+        return fmt.Errorf("error escribiendo archivo dot: %v", err)
+    }
+
+    cmd := exec.Command("dot", "-Tpng", dotPath, "-o", outputPath)
+    if err := cmd.Run(); err != nil {
+        return fmt.Errorf("error generando imagen con dot: %v", err)
+    }
+
+    return nil
 }
 
-func writeTextFile(path, content string) string {
+func formatearFecha(raw string) string {
+    if len(raw) < 10 {
+        return raw
+    }
+    t, err := time.Parse("2006-01-02 15:04:05", raw)
+    if err != nil {
+        return raw
+    }
+    return t.Format("02/01/2006")
+}
+
+func formatearHora(raw string) string {
+    if len(raw) < 10 {
+        return raw
+    }
+    t, err := time.Parse("2006-01-02 15:04:05", raw)
+    if err != nil {
+        return raw
+    }
+    return t.Format("15:04")
+}
+
+func escribirTexto(path, content string) string {
     err := os.WriteFile(path, []byte(content), 0644)
     if err != nil {
         return fmt.Sprintf("Error escribiendo archivo: %v", err)
