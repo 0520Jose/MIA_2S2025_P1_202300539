@@ -3,7 +3,6 @@ package commands
 import (
     "backend/structs"
     "fmt"
-    "os"
     "strings"
 )
 
@@ -11,6 +10,7 @@ func Mkdir(params map[string]string) string {
     if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
+    
     rawPath, ok := params["-path"]
     if !ok || strings.TrimSpace(rawPath) == "" {
         return "Error: parámetro -path es obligatorio."
@@ -45,6 +45,7 @@ func Mkdir(params map[string]string) string {
         return fmt.Sprintf("Error: %v", err)
     }
     defer disk.Close()
+    
     pm := getMountByID(usuarioActual.PartitionID)
     if pm == nil {
         return "Error: partición no montada."
@@ -68,7 +69,7 @@ func Mkdir(params map[string]string) string {
         if err != nil {
             return "Error: " + err.Error()
         }
-        if child.I_type[0] == '0' {
+        if child.I_type[0] == 0 {
             return "Carpeta ya existe"
         }
         return "Error: ya existe un archivo con ese nombre."
@@ -78,58 +79,9 @@ func Mkdir(params map[string]string) string {
         return "Error: " + err.Error()
     }
 
-    if err := writeSuperBlock(disk, pm.Partition.Part_start, sb); err != nil {
+    if err := writeSuperBlock(disk, sb, int64(pm.Partition.Part_start)); err != nil {
         return "Error al actualizar superbloque: " + err.Error()
     }
 
     return "Carpeta creada exitosamente"
-}
-
-func createDirectoryWithPerm(f *os.File, sb *structs.SuperBloque, parentIno int32, name string, perm [3]byte) (int32, error) {
-    idxIno, err := allocInode(f, sb)
-    if err != nil {
-        return -1, err
-    }
-    idxBlk, err := allocBlock(f, sb)
-    if err != nil {
-        return -1, err
-    }
-
-    var ino structs.Inodo
-    ino.I_uid = int32(usuarioActual.UID)
-    ino.I_gid = int32(usuarioActual.GID)
-    ino.I_s = 0
-    t := fecha17()
-    copy(ino.I_atime[:], t)
-    copy(ino.I_ctime[:], t)
-    copy(ino.I_mtime[:], t)
-    for i := range ino.I_block {
-        ino.I_block[i] = -1
-    }
-    ino.I_block[0] = idxBlk
-    ino.I_type[0] = 0
-    ino.I_perm = perm
-    if err := writeInode(f, sb, idxIno, &ino); err != nil {
-        return -1, err
-    }
-
-    var dir structs.BCarpeta
-    for i := range dir.B_content {
-        dir.B_content[i].B_inodo = -1
-        for j := range dir.B_content[i].B_name {
-            dir.B_content[i].B_name[j] = 0
-        }
-    }
-    dir.B_content[0].B_inodo = idxIno
-    copy(dir.B_content[0].B_name[:], ".")
-    dir.B_content[1].B_inodo = parentIno
-    copy(dir.B_content[1].B_name[:], "..")
-    if err := writeDirBlock(f, sb, idxBlk, &dir); err != nil {
-        return -1, err
-    }
-
-    if err := addDirEntry(f, sb, parentIno, name, idxIno); err != nil {
-        return -1, err
-    }
-    return idxIno, nil
 }

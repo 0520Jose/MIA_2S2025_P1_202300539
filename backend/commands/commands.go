@@ -65,6 +65,15 @@ func parseArgs(args []string) map[string]string {
     return params
 }
 
+func unquoteValue(s string) string {
+    v := strings.TrimSpace(s)
+    if len(v) >= 2 && ((strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"")) ||
+        (strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'"))) {
+        return v[1 : len(v)-1]
+    }
+    return v
+}
+
 func splitFields(s string) []string {
     var out []string
     var buf strings.Builder

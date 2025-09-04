@@ -81,8 +81,8 @@ func Mkfs(params map[string]string) string {
         return "Error: partición demasiado pequeña para EXT2"
     }
     n := numerador / denominador
-    if n < 2 {
-        n = 2
+    if n < 3 {
+        n = 3
     }
 
     var sb structs.SuperBloque
@@ -102,8 +102,8 @@ func Mkfs(params map[string]string) string {
     sb.S_inode_start = sb.S_bm_block_start + sb.S_blocks_count
     sb.S_block_start = sb.S_inode_start + sb.S_inodes_count*sb.S_inode_s
 
-    usedInodes := int32(2)
-    usedBlocks := int32(2)
+    usedInodes := int32(3)
+    usedBlocks := int32(3)
     sb.S_free_inodes_count = sb.S_inodes_count - usedInodes
     sb.S_free_blocks_count = sb.S_blocks_count - usedBlocks
     sb.S_first_ino = usedInodes
@@ -122,6 +122,7 @@ func Mkfs(params map[string]string) string {
     bmInodos := bytes.Repeat([]byte{0}, int(sb.S_inodes_count))
     bmInodos[0] = 1
     bmInodos[1] = 1
+    bmInodos[2] = 1
     if _, err := f.Write(bmInodos); err != nil {
         return "Error al escribir bm inodos: " + err.Error()
     }
@@ -132,6 +133,7 @@ func Mkfs(params map[string]string) string {
     bmBloques := bytes.Repeat([]byte{0}, int(sb.S_blocks_count))
     bmBloques[0] = 1
     bmBloques[1] = 1
+    bmBloques[2] = 1
     if _, err := f.Write(bmBloques); err != nil {
         return "Error al escribir bm bloques: " + err.Error()
     }
@@ -150,6 +152,20 @@ func Mkfs(params map[string]string) string {
     inoRoot.I_type[0] = 0
     inoRoot.I_perm = [3]byte{7, 5, 5}
 
+    var inoHome structs.Inodo
+    inoHome.I_uid = 1
+    inoHome.I_gid = 1
+    inoHome.I_s = int32(binary.Size(structs.BCarpeta{}))
+    copy(inoHome.I_atime[:], fecha17())
+    copy(inoHome.I_ctime[:], fecha17())
+    copy(inoHome.I_mtime[:], fecha17())
+    for i := range inoHome.I_block {
+        inoHome.I_block[i] = -1
+    }
+    inoHome.I_block[0] = 1
+    inoHome.I_type[0] = 0
+    inoHome.I_perm = [3]byte{7, 5, 5}
+
     contenidoUsers := "1,G,root\n1,U,root,root,123\n"
     var inoUsers structs.Inodo
     inoUsers.I_uid = 1
@@ -161,30 +177,9 @@ func Mkfs(params map[string]string) string {
     for i := range inoUsers.I_block {
         inoUsers.I_block[i] = -1
     }
-
-    blockSize = int32(binary.Size(structs.BArchivo{}))
-    numBlocks := (len(contenidoUsers) + int(blockSize) - 1) / int(blockSize)
-    for i := 0; i < numBlocks && i < len(inoUsers.I_block); i++ {
-        inoUsers.I_block[i] = int32(i + 1)
-    }
+    inoUsers.I_block[0] = 2
     inoUsers.I_type[0] = 1
     inoUsers.I_perm = [3]byte{6, 6, 4}
-
-    for i := 0; i < numBlocks && i < len(inoUsers.I_block); i++ {
-        start := i * int(blockSize)
-        end := start + int(blockSize)
-        if end > len(contenidoUsers) {
-            end = len(contenidoUsers)
-        }
-        var bUsers structs.BArchivo
-        copy(bUsers.B_content[:], []byte(contenidoUsers[start:end]))
-        if _, err := f.Seek(int64(sb.S_block_start)+int64(inoUsers.I_block[i])*int64(sb.S_block_s), 0); err != nil {
-            return "Error al posicionar bloque users.txt: " + err.Error()
-        }
-        if err := binary.Write(f, binary.LittleEndian, &bUsers); err != nil {
-            return "Error al escribir bloque users.txt: " + err.Error()
-        }
-    }
 
     if _, err := f.Seek(int64(sb.S_inode_start)+0*int64(sb.S_inode_s), 0); err != nil {
         return "Error al posicionar inodo raíz: " + err.Error()
@@ -192,7 +187,15 @@ func Mkfs(params map[string]string) string {
     if err := binary.Write(f, binary.LittleEndian, &inoRoot); err != nil {
         return "Error al escribir inodo raíz: " + err.Error()
     }
+    
     if _, err := f.Seek(int64(sb.S_inode_start)+1*int64(sb.S_inode_s), 0); err != nil {
+        return "Error al posicionar inodo home: " + err.Error()
+    }
+    if err := binary.Write(f, binary.LittleEndian, &inoHome); err != nil {
+        return "Error al escribir inodo home: " + err.Error()
+    }
+    
+    if _, err := f.Seek(int64(sb.S_inode_start)+2*int64(sb.S_inode_s), 0); err != nil {
         return "Error al posicionar inodo users.txt: " + err.Error()
     }
     if err := binary.Write(f, binary.LittleEndian, &inoUsers); err != nil {
@@ -211,7 +214,7 @@ func Mkfs(params map[string]string) string {
     bdir.B_content[1].B_inodo = 0
     copy(bdir.B_content[1].B_name[:], "..")
     bdir.B_content[2].B_inodo = 1
-    copy(bdir.B_content[2].B_name[:], "users.txt")
+    copy(bdir.B_content[2].B_name[:], "home")
 
     if _, err := f.Seek(int64(sb.S_block_start)+0*int64(sb.S_block_s), 0); err != nil {
         return "Error al posicionar bloque carpeta raíz: " + err.Error()
@@ -220,18 +223,43 @@ func Mkfs(params map[string]string) string {
         return "Error al escribir bloque carpeta raíz: " + err.Error()
     }
 
+    var bhome structs.BCarpeta
+    for i := range bhome.B_content {
+        bhome.B_content[i].B_inodo = -1
+        for j := range bhome.B_content[i].B_name {
+            bhome.B_content[i].B_name[j] = 0
+        }
+    }
+    bhome.B_content[0].B_inodo = 1
+    copy(bhome.B_content[0].B_name[:], ".")
+    bhome.B_content[1].B_inodo = 0
+    copy(bhome.B_content[1].B_name[:], "..")
+    bhome.B_content[2].B_inodo = 2
+    copy(bhome.B_content[2].B_name[:], "users.txt")
+
+    if _, err := f.Seek(int64(sb.S_block_start)+1*int64(sb.S_block_s), 0); err != nil {
+        return "Error al posicionar bloque carpeta home: " + err.Error()
+    }
+    if err := binary.Write(f, binary.LittleEndian, &bhome); err != nil {
+        return "Error al escribir bloque carpeta home: " + err.Error()
+    }
+
     var bUsers structs.BArchivo
     copy(bUsers.B_content[:], []byte(contenidoUsers))
-    if _, err := f.Seek(int64(sb.S_block_start)+1*int64(sb.S_block_s), 0); err != nil {
+    if _, err := f.Seek(int64(sb.S_block_start)+2*int64(sb.S_block_s), 0); err != nil {
         return "Error al posicionar bloque users.txt: " + err.Error()
     }
     if err := binary.Write(f, binary.LittleEndian, &bUsers); err != nil {
         return "Error al escribir bloque users.txt: " + err.Error()
     }
 
+    if err := ValidarSistemaEXT2(id); err != nil {
+        return fmt.Sprintf("Error: formateo falló - %v", err)
+    }
+
     return fmt.Sprintf("Sistema de archivos EXT2 creado correctamente en la partición con ID %s", id)
 }
 
 func fecha17() string {
-    return time.Now().Format("2006/01/02 15:04")
+    return time.Now().Format("2006-01-02 15:04:05.999999999")
 }

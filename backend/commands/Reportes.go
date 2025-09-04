@@ -366,7 +366,8 @@ func generarReporteInode(path, id string) string {
 }
 
 func generarReporteBlock(path string, id string) string {
-    f, sb, _, err := structs.SistemaArchivos_ID(id)
+    f, sb, _, err := structs.SuperBloque_ID(id)
+
     if err != nil {
         return fmt.Sprintf("Error obteniendo FS: %v", err)
     }
@@ -402,7 +403,7 @@ func generarReporteBlock(path string, id string) string {
         
         switch tipoBloque {
         case "carpeta":
-            bc, ok := structs.LeerBloqueCarptea(f, sb, int32(blockNum))
+            bc, ok := structs.LeerBloqueCarpeta(f, sb, int32(blockNum))
             if ok {
                 b.WriteString(generarTablaCarpeta(int32(blockNum), &bc))
             }
@@ -468,12 +469,10 @@ func esBloqueUsado(bitmap []byte, blockNum int) bool {
 }
 
 func determinarTipoBloque(f *os.File, sb *structs.SuperBloque, blockNum int) string {
-    bloque, ok := structs.ObtenerBloque(f, sb, blockNum)
+    data, ok := structs.ObtenerBloqueBinario(f, sb, blockNum)
     if !ok {
         return "desconocido"
     }
-    
-    data := bloque.Data[:]
     
     var potentialsPointers []int32
     for i := 0; i < 64 && i < len(data)-3; i += 4 {
@@ -522,14 +521,8 @@ func esNombreValido(nombre string) bool {
 }
 
 func leerBloqueApuntadores(f *os.File, sb *structs.SuperBloque, blockNum int) *structs.BApuntadores {
-    bloque, ok := structs.ObtenerBloque(f, sb, blockNum)
+    bp, ok := structs.ObtenerBloqueApuntadores(f, sb, blockNum)
     if !ok {
-        return nil
-    }
-    
-    var bp structs.BApuntadores
-    rdr := bytes.NewReader(bloque.Data[:])
-    if err := binary.Read(rdr, binary.LittleEndian, &bp); err != nil {
         return nil
     }
     
@@ -689,22 +682,6 @@ func generarReporteSB(path, id string) string {
 
     nombreDisco := structs.NombreDisco_ID(id)
     dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_nombre_hd</font></td><td>%s</td></tr>\n", nombreDisco))
-
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_arbol_virtual_count</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_detalle_directorio_count</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_arbol_virtual_free</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_detalle_directorio_free</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_arbol_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_arbol_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_bitmap_detalle_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_detalle_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_ap_log</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_arbol_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_size_struct_detalle_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_arbol_directorio</font></td><td>No implementado</td></tr>\n")
-    dot.WriteString("<tr><td bgcolor='#2e7d32'><font color='white'>sb_first_free_bit_detalle_directorio</font></td><td>No implementado</td></tr>\n")
-
-
     dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_filesystem_type</font></td><td>%d</td></tr>\n", sb.S_filesystem_type))
     dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_inodos_count</font></td><td>%d</td></tr>\n", sb.S_inodes_count))
     dot.WriteString(fmt.Sprintf("<tr><td bgcolor='#2e7d32'><font color='white'>sb_bloques_count</font></td><td>%d</td></tr>\n", sb.S_blocks_count))

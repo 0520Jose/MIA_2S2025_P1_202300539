@@ -68,7 +68,7 @@ func Fdisk(params map[string]string) string {
     }
     defer file.Close()
 
-    mbr, err := structs.LeerMBR(file)
+    mbr, err := structs.LeerMBR(path)
     if err != nil {
         return fmt.Sprintf("Error leyendo MBR: %v", err)
     }

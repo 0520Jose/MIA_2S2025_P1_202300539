@@ -2,12 +2,6 @@ package commands
 
 import "backend/structs"
 
-const (
-    permRead  = 4
-    permWrite = 2
-    permExec  = 1
-)
-
 func EsRoot() bool {
     return usuarioActual != nil && usuarioActual.Username == "root"
 }

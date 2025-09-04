@@ -10,8 +10,6 @@ import (
     "strings"
 )
 
-const usersInodeIndex = 1
-
 func Mkgrp(args map[string]string) string {
     if usuarioActual == nil {
         return "Error: No hay una sesión activa."
@@ -53,7 +51,7 @@ func Mkgrp(args map[string]string) string {
 }
 
 func EscribirUsersTxt(partitionID string, contenido string) error {
-    disk, sb, err := CargarSistemaEXT2(partitionID)
+   disk, sb, err := CargarSistemaEXT2(partitionID)
     if err != nil {
         return err
     }
@@ -181,48 +179,6 @@ func EscribirUsersTxt(partitionID string, contenido string) error {
     }
 
     return nil
-}
-
-func LeerArchivoUsersTXT(disk *os.File, sb *structs.SuperBloque) (string, error) {
-    inodeOffset := int64(sb.S_inode_start) + int64(usersInodeIndex)*int64(sb.S_inode_s)
-
-    var ino structs.Inodo
-    if _, err := disk.Seek(inodeOffset, 0); err != nil {
-        return "", err
-    }
-    if err := binary.Read(disk, binary.LittleEndian, &ino); err != nil {
-        return "", err
-    }
-
-    var content bytes.Buffer
-    bytesRead := 0
-    blkDataSize := len(structs.BArchivo{}.B_content)
-
-    for _, blkNum := range ino.I_block {
-        if blkNum == -1 || bytesRead >= int(ino.I_s) {
-            if bytesRead >= int(ino.I_s) {
-                break
-            }
-            continue
-        }
-        blockOffset := int64(sb.S_block_start) + int64(blkNum)*int64(sb.S_block_s)
-        var b structs.BArchivo
-        if _, err := disk.Seek(blockOffset, 0); err != nil {
-            return "", err
-        }
-        if err := binary.Read(disk, binary.LittleEndian, &b); err != nil {
-            return "", err
-        }
-        remaining := int(ino.I_s) - bytesRead
-        toRead := blkDataSize
-        if toRead > remaining {
-            toRead = remaining
-        }
-        content.Write(b.B_content[:toRead])
-        bytesRead += toRead
-    }
-
-    return content.String(), nil
 }
 
 func nuevoContenidoSeguro(s string) string {

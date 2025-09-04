@@ -1,13 +1,20 @@
 package structs
 
 import (
-    "bytes"
     "encoding/binary"
     "fmt"
     "io"
     "os"
     "strings"
     "path/filepath"
+)
+
+const (
+    DIRECT_BLOCKS     = 12
+    INDIRECT_SIMPLE   = 12
+    INDIRECT_DOUBLE   = 13
+    INDIRECT_TRIPLE   = 14
+    POINTERS_PER_BLOCK = 16
 )
 
 var Particiones_Montadas []PartitionMount
@@ -96,173 +103,119 @@ type BApuntadores struct {
     B_pointers [16]int32
 }
 
-type Bitmap []byte
-
-type Bloque struct {
-    Data [64]byte
+type InfoArchivo struct {
+    Nombre       string
+    Tipo         string
+    Permisos     string
+    Propietario  string
+    Grupo        string
+    Size         int32
+    Creacion     string
+    Modificacion string
 }
 
-func LeerMBR(archivo *os.File) (MBR, error) {
-    archivo.Seek(0, 0)
+func LeerMBR(diskPath string) (MBR, error) {
     var mbr MBR
-    err := binary.Read(archivo, binary.LittleEndian, &mbr)
+    f, err := os.Open(diskPath)
+    if err != nil {
+        return mbr, err
+    }
+    defer f.Close()
+    
+    if _, err := f.Seek(0, io.SeekStart); err != nil {
+        return mbr, err
+    }
+    
+    err = binary.Read(f, binary.LittleEndian, &mbr)
     return mbr, err
 }
 
-func NombreDisco_ID(id string) string {
-    for _, pm := range Particiones_Montadas {
-        if pm.Id == id {
-            return filepath.Base(pm.Path)
-        }
-    }
-    return ""
-}
-
-func SistemaArchivos_ID(id string) (*os.File, *SuperBloque, *MBR, error) {
-    for _, pm := range Particiones_Montadas {
-        if pm.Id == id {
-            f, err := os.OpenFile(pm.Path, os.O_RDONLY, 0)
-            if err != nil {
-                return nil, nil, nil, fmt.Errorf("No se pudo abrir el disco: %v", err)
-            }
-
-            var mbr MBR
-            if _, err := f.Seek(0, io.SeekStart); err != nil {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("No se pudo buscar MBR: %v", err)
-            }
-            if err := binary.Read(f, binary.LittleEndian, &mbr); err != nil {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("No se pudo leer MBR: %v", err)
-            }
-
-            partStart := pm.Partition.Part_start
-            if partStart <= 0 {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("part_start inválido: %d", partStart)
-            }
-
-            var sb SuperBloque
-            if _, err := f.Seek(int64(partStart), io.SeekStart); err != nil {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("No se pudo buscar superbloque: %v", err)
-            }
-            if err := binary.Read(f, binary.LittleEndian, &sb); err != nil {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("No se pudo leer superbloque: %v", err)
-            }
-            if sb.S_magic != 0xEF53 {
-                f.Close()
-                return nil, nil, nil, fmt.Errorf("Superbloque inválido")
-            }
-
-            return f, &sb, &mbr, nil
-        }
-    }
-    return nil, nil, nil, fmt.Errorf("Partición no montada: %s", id)
-}
-
-func SuperBloque_ID(id string) (*os.File, *SuperBloque, *MBR, error) {
-    return SistemaArchivos_ID(id)
-}
-
-func BitMapInodos(f *os.File, sb *SuperBloque) []byte {
-    n := int(sb.S_inodes_count)
-    if n <= 0 {
-        return nil
-    }
-    bitmap := make([]byte, n)
-    if _, err := f.Seek(int64(sb.S_bm_inode_start), io.SeekStart); err != nil {
-        return nil
-    }
-    if _, err := io.ReadFull(f, bitmap); err != nil {
-        return nil
-    }
-    return bitmap
-}
-
-func GetBitmapBlocks(f *os.File, sb *SuperBloque) []byte {
-    n := int(sb.S_blocks_count)
-    if n <= 0 {
-        return nil
-    }
-    bitmap := make([]byte, n)
-    if _, err := f.Seek(int64(sb.S_bm_block_start), io.SeekStart); err != nil {
-        return nil
-    }
-    if _, err := io.ReadFull(f, bitmap); err != nil {
-        return nil
-    }
-    return bitmap
-}
-
-func ObtenerInodo(f *os.File, sb *SuperBloque, idx int) (Inodo, bool) {
-    var inode Inodo
-
-    if idx < 0 || idx >= int(sb.S_inodes_count) {
-        return inode, false
-    }
-
-    bm := BitMapInodos(f, sb)
-    if bm == nil || idx >= len(bm) || bm[idx] == 0 {
-        return inode, false
-    }
-
-    offset := int64(sb.S_inode_start) + int64(idx)*int64(binary.Size(inode))
-    if _, err := f.Seek(offset, io.SeekStart); err != nil {
-        return inode, false
-    }
-    if err := binary.Read(f, binary.LittleEndian, &inode); err != nil {
-        return inode, false
-    }
-    return inode, true
-}
-
-func ObtenerBloque(f *os.File, sb *SuperBloque, idx int) (Bloque, bool) {
-    var block Bloque
+func ObtenerBloqueBinario(f *os.File, sb *SuperBloque, idx int) ([]byte, bool) {
     if idx < 0 || idx >= int(sb.S_blocks_count) {
-        return block, false
+        return nil, false
     }
 
     bm := GetBitmapBlocks(f, sb)
     if bm == nil || idx >= len(bm) || bm[idx] == 0 {
-        return block, false
+        return nil, false
     }
 
-    offset := int64(sb.S_block_start) + int64(idx)*int64(binary.Size(block))
+    data := make([]byte, 64)
+    offset := int64(sb.S_block_start) + int64(idx)*64
     if _, err := f.Seek(offset, io.SeekStart); err != nil {
-        return block, false
+        return nil, false
     }
-    if err := binary.Read(f, binary.LittleEndian, &block); err != nil {
-        return block, false
+    if _, err := f.Read(data); err != nil {
+        return nil, false
     }
-    return block, true
+    return data, true
 }
 
-func trimBytes(b []byte) string {
-    if i := bytes.IndexByte(b, 0); i >= 0 {
-        b = b[:i]
-    }
-    return strings.TrimSpace(string(b))
+func ReadBinaryStruct(f *os.File, data interface{}) error {
+    return binary.Read(f, binary.LittleEndian, data)
 }
 
-func EsCarpeta(in Inodo) bool  { return len(in.I_type) > 0 && in.I_type[0] == 0 }
-func EsArchivo(in Inodo) bool { return len(in.I_type) > 0 && in.I_type[0] == 1 }
+func ObtenerBloqueArchivo(f *os.File, sb *SuperBloque, idx int) (BArchivo, bool) {
+    var ba BArchivo
+    if idx < 0 || idx >= int(sb.S_blocks_count) {
+        return ba, false
+    }
 
-func LeerBloqueCarptea(f *os.File, sb *SuperBloque, idx int32) (BCarpeta, bool) {
+    bm := GetBitmapBlocks(f, sb)
+    if bm == nil || idx >= len(bm) || bm[idx] == 0 {
+        return ba, false
+    }
+
+    offset := int64(sb.S_block_start) + int64(idx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return ba, false
+    }
+    if err := binary.Read(f, binary.LittleEndian, &ba); err != nil {
+        return ba, false
+    }
+    return ba, true
+}
+
+func ObtenerBloqueCarpeta(f *os.File, sb *SuperBloque, idx int) (BCarpeta, bool) {
     var bc BCarpeta
-    if idx < 0 {
+    if idx < 0 || idx >= int(sb.S_blocks_count) {
         return bc, false
     }
-    block, ok := ObtenerBloque(f, sb, int(idx))
-    if !ok {
+
+    bm := GetBitmapBlocks(f, sb)
+    if bm == nil || idx >= len(bm) || bm[idx] == 0 {
         return bc, false
     }
-    rdr := bytes.NewReader(block.Data[:])
-    if err := binary.Read(rdr, binary.LittleEndian, &bc); err != nil {
+
+    offset := int64(sb.S_block_start) + int64(idx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return bc, false
+    }
+    if err := binary.Read(f, binary.LittleEndian, &bc); err != nil {
         return bc, false
     }
     return bc, true
+}
+
+func ObtenerBloqueApuntadores(f *os.File, sb *SuperBloque, idx int) (BApuntadores, bool) {
+    var bp BApuntadores
+    if idx < 0 || idx >= int(sb.S_blocks_count) {
+        return bp, false
+    }
+
+    bm := GetBitmapBlocks(f, sb)
+    if bm == nil || idx >= len(bm) || bm[idx] == 0 {
+        return bp, false
+    }
+
+    offset := int64(sb.S_block_start) + int64(idx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return bp, false
+    }
+    if err := binary.Read(f, binary.LittleEndian, &bp); err != nil {
+        return bp, false
+    }
+    return bp, true
 }
 
 func LeerBloqueArchivo(f *os.File, sb *SuperBloque, idx int32) (BArchivo, bool) {
@@ -270,80 +223,125 @@ func LeerBloqueArchivo(f *os.File, sb *SuperBloque, idx int32) (BArchivo, bool) 
     if idx < 0 {
         return ba, false
     }
-    block, ok := ObtenerBloque(f, sb, int(idx))
+    
+    block, ok := ObtenerBloqueArchivo(f, sb, int(idx))
     if !ok {
         return ba, false
     }
-    rdr := bytes.NewReader(block.Data[:])
-    if err := binary.Read(rdr, binary.LittleEndian, &ba); err != nil {
-        return ba, false
-    }
-    return ba, true
+    return block, true
 }
 
-func ListaCarpetas(f *os.File, sb *SuperBloque, dir Inodo) map[string]int32 {
-    entries := make(map[string]int32)
-    bmIn := BitMapInodos(f, sb)
-
-    for i := 0; i < 12; i++ {
-        blk := dir.I_block[i]
-        if blk < 0 {
-            continue
-        }
-        bc, ok := LeerBloqueCarptea(f, sb, blk)
-        if !ok {
-            continue
-        }
-        for _, c := range bc.B_content {
-            name := trimBytes(c.B_name[:])
-            ino := c.B_inodo
-            if name == "" || name == "." || name == ".." || ino < 0 {
-                continue
-            }
-            if bmIn != nil && int(ino) < len(bmIn) && bmIn[int(ino)] != 0 {
-                entries[name] = ino
-            }
-        }
+func LeerBloqueCarpeta(f *os.File, sb *SuperBloque, idx int32) (BCarpeta, bool) {
+    var bc BCarpeta
+    if idx < 0 {
+        return bc, false
     }
-    return entries
-}
-
-func Direccion(f *os.File, sb *SuperBloque, path string) (int, Inodo, bool) {
-    comps := []string{}
-    for _, p := range strings.Split(path, "/") {
-        p = strings.TrimSpace(p)
-        if p != "" {
-            comps = append(comps, p)
-        }
-    }
-
-    currIdx := 0
-    curr, ok := ObtenerInodo(f, sb, currIdx)
+    
+    block, ok := ObtenerBloqueCarpeta(f, sb, int(idx))
     if !ok {
-        return -1, Inodo{}, false
+        return bc, false
+    }
+    return block, true
+}
+
+func ObtenerInodo(f *os.File, sb *SuperBloque, idx int) (Inodo, bool) {
+    var ino Inodo
+    if idx < 0 || idx >= int(sb.S_inodes_count) {
+        return ino, false
     }
 
-    if len(comps) == 0 {
-        return currIdx, curr, true
+    bm := BitMapInodos(f, sb)
+    if bm == nil || idx >= len(bm) || bm[idx] == 0 {
+        return ino, false
     }
 
-    for _, name := range comps {
-        if !EsCarpeta(curr) {
-            return -1, Inodo{}, false
-        }
-        ents := ListaCarpetas(f, sb, curr)
-        nextIdx32, exists := ents[name]
-        if !exists {
-            return -1, Inodo{}, false
-        }
-        next, ok := ObtenerInodo(f, sb, int(nextIdx32))
-        if !ok {
-            return -1, Inodo{}, false
-        }
-        currIdx = int(nextIdx32)
-        curr = next
+    offset := int64(sb.S_inode_start) + int64(idx)*int64(sb.S_inode_s)
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return ino, false
     }
-    return currIdx, curr, true
+    if err := binary.Read(f, binary.LittleEndian, &ino); err != nil {
+        return ino, false
+    }
+    return ino, true
+}
+
+func SistemaArchivos_ID(id string) (*os.File, Partition, MBR, error) {
+    var particion Partition
+    var mbr MBR
+
+    for _, montada := range Particiones_Montadas {
+        if montada.Id == id {
+            f, err := os.OpenFile(montada.Path, os.O_RDWR, 0755)
+            if err != nil {
+                return nil, particion, mbr, err
+            }
+
+            if _, err := f.Seek(0, io.SeekStart); err != nil {
+                f.Close()
+                return nil, particion, mbr, err
+            }
+
+            if err := binary.Read(f, binary.LittleEndian, &mbr); err != nil {
+                f.Close()
+                return nil, particion, mbr, err
+            }
+
+            return f, montada.Partition, mbr, nil
+        }
+    }
+
+    return nil, particion, mbr, fmt.Errorf("partición con ID %s no encontrada", id)
+}
+
+func SuperBloque_ID(id string) (*os.File, *SuperBloque, Partition, error) {
+    f, particion, _, err := SistemaArchivos_ID(id)
+    if err != nil {
+        return nil, nil, particion, err
+    }
+
+    sb := &SuperBloque{}
+    if _, err := f.Seek(int64(particion.Part_start), io.SeekStart); err != nil {
+        f.Close()
+        return nil, nil, particion, err
+    }
+
+    if err := binary.Read(f, binary.LittleEndian, sb); err != nil {
+        f.Close()
+        return nil, nil, particion, err
+    }
+
+    return f, sb, particion, nil
+}
+
+func NombreDisco_ID(id string) string {
+    for _, montada := range Particiones_Montadas {
+        if montada.Id == id {
+            return filepath.Base(montada.Path)
+        }
+    }
+    return "disco_desconocido"
+}
+
+func BitMapInodos(f *os.File, sb *SuperBloque) []byte {
+    bm := make([]byte, sb.S_inodes_count)
+    if _, err := f.Seek(int64(sb.S_bm_inode_start), io.SeekStart); err != nil {
+        return nil
+    }
+    if _, err := f.Read(bm); err != nil {
+        return nil
+    }
+    return bm
+}
+
+func GetBitmapBlocks(f *os.File, sb *SuperBloque) []byte {
+    bm := make([]byte, sb.S_blocks_count)
+    if _, err := f.Seek(int64(sb.S_bm_block_start), io.SeekStart); err != nil {
+        return nil
+    }
+    if _, err := f.Read(bm); err != nil {
+        return nil
+    }
+    return bm
 }
 
 func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
@@ -372,28 +370,28 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
         b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightblue'>\n")
         b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>INODO %d</b></td></tr>\n", idx))
         b.WriteString(fmt.Sprintf("      <tr><td>i_type</td><td>%d</td></tr>\n", ino.I_type[0]))
-        if 0 < 15 {
-            b.WriteString(fmt.Sprintf("      <tr><td>ap0 (directo)</td><td>%d</td></tr>\n", ino.I_block[0]))
+        
+        for i := 0; i < DIRECT_BLOCKS; i++ {
+            b.WriteString(fmt.Sprintf("      <tr><td>ap%d (directo)</td><td>%d</td></tr>\n", i, ino.I_block[i]))
         }
-        if 12 < 15 {
-            b.WriteString(fmt.Sprintf("      <tr><td>ap1 (indirecto)</td><td>%d</td></tr>\n", ino.I_block[12]))
-        }
-        if 13 < 15 {
-            b.WriteString(fmt.Sprintf("      <tr><td>ap2 (doble indirecto)</td><td>%d</td></tr>\n", ino.I_block[13]))
-        }
+        
+        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (indirecto)</td><td>%d</td></tr>\n", INDIRECT_SIMPLE, ino.I_block[INDIRECT_SIMPLE]))
+        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (doble ind.)</td><td>%d</td></tr>\n", INDIRECT_DOUBLE, ino.I_block[INDIRECT_DOUBLE]))
+        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (triple ind.)</td><td>%d</td></tr>\n", INDIRECT_TRIPLE, ino.I_block[INDIRECT_TRIPLE]))
+        
         b.WriteString(fmt.Sprintf("      <tr><td>i_perm</td><td>%d</td></tr>\n", ino.I_perm))
         b.WriteString("    </table>\n")
         b.WriteString("  >];\n")
         
         if EsCarpeta(ino) {
-            for i := 0; i < 12; i++ {
+            for i := 0; i < DIRECT_BLOCKS; i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloqueCarpeta(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
                     
-                    bc, ok := LeerBloqueCarptea(f, sb, blockIdx)
+                    bc, ok := LeerBloqueCarpeta(f, sb, blockIdx)
                     if ok {
                         for _, content := range bc.B_content {
                             name := trimBytes(content.B_name[:])
@@ -407,7 +405,7 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                 }
             }
         } else if EsArchivo(ino) {
-            for i := 0; i < 12; i++ {
+            for i := 0; i < DIRECT_BLOCKS; i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloqueArchivo(f, sb, &b, int(blockIdx), idx, s)
@@ -415,12 +413,15 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
                 }
             }
-            for i := 12; i < 15; i++ {
+            
+            for i := INDIRECT_SIMPLE; i <= INDIRECT_TRIPLE && i < len(ino.I_block); i++ {
                 blockIdx := ino.I_block[i]
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloquePuntero(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
                     b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                    
+                    procesarBloqueIndirecto(f, sb, &b, int(blockIdx), idx, &visitedBlocks, s)
                 }
             }
         }
@@ -431,33 +432,9 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
     return b.String()
 }
 
-func GenerarBloqueArchivo(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int, s int) {
-    ba, ok := LeerBloqueArchivo(f, sb, int32(blockIdx))
-    if !ok {
-        return
-    }
-    content := trimBytes(ba.B_content[:])
-    if len(content) > 64 {
-        content = content[:64]
-    }
-
-    b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
-    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='yellow'>\n")
-    b.WriteString(fmt.Sprintf("      <tr><td><b>b. archivo %d</b></td></tr>\n", blockIdx))
-    b.WriteString(fmt.Sprintf("      <tr><td>%s</td></tr>\n", content))
-    b.WriteString("    </table>\n")
-    b.WriteString("  >];\n")
-}
-
 func GenerarBloquePuntero(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
-    block, ok := ObtenerBloque(f, sb, blockIdx)
+    pointers, ok := ObtenerBloqueApuntadores(f, sb, blockIdx)
     if !ok {
-        return
-    }
-
-    var pointers BApuntadores
-    rdr := bytes.NewReader(block.Data[:])
-    if err := binary.Read(rdr, binary.LittleEndian, &pointers); err != nil {
         return
     }
 
@@ -465,7 +442,7 @@ func GenerarBloquePuntero(f *os.File, sb *SuperBloque, b *strings.Builder, block
     b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightgreen'>\n")
     b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. apuntadores %d</b></td></tr>\n", blockIdx))
 
-    for i := 0; i < 2 && i < len(pointers.B_pointers); i++ {
+    for i := 0; i < 16; i++ {
         ptr := pointers.B_pointers[i]
         b.WriteString(fmt.Sprintf("      <tr><td>ap_%d</td><td>%d</td></tr>\n", i, ptr))
     }
@@ -475,140 +452,247 @@ func GenerarBloquePuntero(f *os.File, sb *SuperBloque, b *strings.Builder, block
 }
 
 func GenerarBloqueCarpeta(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int) {
-    bc, ok := LeerBloqueCarptea(f, sb, int32(blockIdx))
+    bc, ok := LeerBloqueCarpeta(f, sb, int32(blockIdx))
     if !ok {
         return
     }
-    
+
     b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
-    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='salmon'>\n")
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightyellow'>\n")
     b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. carpeta %d</b></td></tr>\n", blockIdx))
-    b.WriteString("      <tr><td><b>b_name</b></td><td><b>b_inodo</b></td></tr>\n")
-    
+
     for _, content := range bc.B_content {
         name := trimBytes(content.B_name[:])
         if name != "" {
             b.WriteString(fmt.Sprintf("      <tr><td>%s</td><td>%d</td></tr>\n", name, content.B_inodo))
-        } else {
-            b.WriteString("      <tr><td></td><td></td></tr>\n")
         }
     }
-    
+
     b.WriteString("    </table>\n")
     b.WriteString("  >];\n")
 }
 
+func GenerarBloqueArchivo(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx, s int) {
+    ba, ok := LeerBloqueArchivo(f, sb, int32(blockIdx))
+    if !ok {
+        return
+    }
 
-func LeerArchivoDeFS(id, path string) (string, error) {
-    f, sb, _, err := SistemaArchivos_ID(id)
+    content := trimBytes(ba.B_content[:])
+    if len(content) > s {
+        content = content[:s] + "..."
+    }
+
+    content = strings.ReplaceAll(content, "&", "&amp;")
+    content = strings.ReplaceAll(content, "<", "&lt;")
+    content = strings.ReplaceAll(content, ">", "&gt;")
+    content = strings.ReplaceAll(content, "\"", "&quot;")
+
+    b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightcoral'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td><b>b. archivo %d</b></td></tr>\n", blockIdx))
+    b.WriteString(fmt.Sprintf("      <tr><td align='left'><font face='monospace'>%s</font></td></tr>\n", content))
+    b.WriteString("    </table>\n")
+    b.WriteString("  >];\n")
+}
+
+func procesarBloqueIndirecto(f *os.File, sb *SuperBloque, b *strings.Builder, blockIdx, inodeIdx int, visitedBlocks *map[int]bool, s int) {
+    pointers, ok := ObtenerBloqueApuntadores(f, sb, blockIdx)
+    if !ok {
+        return
+    }
+
+    for _, ptr := range pointers.B_pointers {
+        if ptr >= 0 && !(*visitedBlocks)[int(ptr)] {
+            GenerarBloqueArchivo(f, sb, b, int(ptr), inodeIdx, s)
+            (*visitedBlocks)[int(ptr)] = true
+            b.WriteString(fmt.Sprintf("  block%d -> block%d;\n", blockIdx, ptr))
+        }
+    }
+}
+
+func EsCarpeta(ino Inodo) bool {
+    return ino.I_type[0] == 0
+}
+
+func EsArchivo(ino Inodo) bool {
+    return ino.I_type[0] == 1
+}
+
+func trimBytes(b []byte) string {
+    end := len(b)
+    for i, v := range b {
+        if v == 0 {
+            end = i
+            break
+        }
+    }
+    return string(b[:end])
+}
+
+func LeerArchivoDeFS(id, rutaArchivo string) (string, error) {
+    f, sb, _, err := SuperBloque_ID(id)
     if err != nil {
         return "", err
     }
     defer f.Close()
 
-    _, ino, ok := Direccion(f, sb, path)
-    if !ok {
-        return "", fmt.Errorf("ruta no encontrada: %s", path)
-    }
-    if !EsArchivo(ino) {
-        return "", fmt.Errorf("No es un archivo: %s", path)
+    ino, err := buscarInodoPorRuta(f, sb, rutaArchivo)
+    if err != nil {
+        return "", err
     }
 
-    var data []byte
-    remaining := int(ino.I_s)
-    for i := 0; i < 12 && remaining > 0; i++ {
-        blk := ino.I_block[i]
-        if blk < 0 {
-            continue
-        }
-        ba, ok := LeerBloqueArchivo(f, sb, blk)
-        if !ok {
+    if EsCarpeta(ino) {
+        return "", fmt.Errorf("la ruta especificada es una carpeta, no un archivo")
+    }
+
+    var contenido strings.Builder
+    
+    for i := 0; i < DIRECT_BLOCKS; i++ {
+        blockIdx := ino.I_block[i]
+        if blockIdx < 0 {
             break
         }
-        chunk := 64
-        if remaining < chunk {
-            chunk = remaining
+        
+        ba, ok := LeerBloqueArchivo(f, sb, blockIdx)
+        if ok {
+            contenido.Write(ba.B_content[:])
         }
-        data = append(data, ba.B_content[:chunk]...)
-        remaining -= chunk
     }
-    return string(data), nil
+
+    return strings.TrimRight(contenido.String(), "\x00"), nil
 }
 
-type CarpetaEntrada struct {
-    Nombre       string
-    Tipo         string
-    Permisos     string
-    Propietario  string
-    Grupo        string
-    Creacion     string
-    Modificacion string
-    Size         int32
+func buscarInodoPorRuta(f *os.File, sb *SuperBloque, ruta string) (Inodo, error) {
+    var ino Inodo
+    
+    if ruta == "/" {
+        ino, ok := ObtenerInodo(f, sb, 0)
+        if !ok {
+            return ino, fmt.Errorf("no se pudo obtener el inodo raíz")
+        }
+        return ino, nil
+    }
+
+    parts := strings.Split(strings.Trim(ruta, "/"), "/")
+    currentIno, ok := ObtenerInodo(f, sb, 0)
+    if !ok {
+        return ino, fmt.Errorf("no se pudo obtener el inodo raíz")
+    }
+
+    for _, part := range parts {
+        if part == "" {
+            continue
+        }
+
+        foundIno := int32(-1)
+        
+        for i := 0; i < DIRECT_BLOCKS; i++ {
+            blockIdx := currentIno.I_block[i]
+            if blockIdx < 0 {
+                break
+            }
+            
+            bc, ok := LeerBloqueCarpeta(f, sb, blockIdx)
+            if ok {
+                for _, content := range bc.B_content {
+                    name := trimBytes(content.B_name[:])
+                    if name == part {
+                        foundIno = content.B_inodo
+                        break
+                    }
+                }
+            }
+            
+            if foundIno >= 0 {
+                break
+            }
+        }
+
+        if foundIno < 0 {
+            return ino, fmt.Errorf("archivo o directorio %s no encontrado", part)
+        }
+
+        var ok bool
+        currentIno, ok = ObtenerInodo(f, sb, int(foundIno))
+        if !ok {
+            return ino, fmt.Errorf("no se pudo obtener el inodo %d", foundIno)
+        }
+    }
+
+    return currentIno, nil
 }
 
-func ListaCarpetasFS(id, path string) ([]CarpetaEntrada, error) {
-    f, sb, _, err := SistemaArchivos_ID(id)
+func EscribirBloqueArchivo(f *os.File, sb *SuperBloque, blockIdx int32, ba *BArchivo) error {
+    offset := int64(sb.S_block_start) + int64(blockIdx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return err
+    }
+    return binary.Write(f, binary.LittleEndian, ba)
+}
+
+func EscribirBloqueApuntadores(f *os.File, sb *SuperBloque, blockIdx int32, bp *BApuntadores) error {
+    offset := int64(sb.S_block_start) + int64(blockIdx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return err
+    }
+    return binary.Write(f, binary.LittleEndian, bp)
+}
+
+
+func ListaCarpetasFS(id, rutaCarpeta string) ([]InfoArchivo, error) {
+    f, sb, _, err := SuperBloque_ID(id)
     if err != nil {
         return nil, err
     }
     defer f.Close()
 
-    _, ino, ok := Direccion(f, sb, path)
-    if !ok {
-        return nil, fmt.Errorf("ruta no encontrada: %s", path)
+    ino, err := buscarInodoPorRuta(f, sb, rutaCarpeta)
+    if err != nil {
+        return nil, err
     }
+
     if !EsCarpeta(ino) {
-        return nil, fmt.Errorf("No es un directorio: %s", path)
+        return nil, fmt.Errorf("la ruta especificada no es una carpeta")
     }
 
-    ents := ListaCarpetas(f, sb, ino)
-    out := make([]CarpetaEntrada, 0, len(ents))
-    for name, idx := range ents {
-        child, ok := ObtenerInodo(f, sb, int(idx))
-        if !ok {
-            continue
-        }
-        tipo := "Carpeta"
-        if EsArchivo(child) {
-            tipo = "Archivo"
-        }
-        permisos := FormatearPermisos(child.I_perm)
-        de := CarpetaEntrada{
-            Nombre:       name,
-            Tipo:         tipo,
-            Permisos:     permisos,
-            Propietario:  fmt.Sprintf("%d", child.I_uid),
-            Grupo:        fmt.Sprintf("%d", child.I_gid),
-            Creacion:     trimBytes(child.I_ctime[:]),
-            Modificacion: trimBytes(child.I_mtime[:]),
-            Size:        child.I_s,
-        }
-        out = append(out, de)
-    }
-    return out, nil
-}
+    var archivos []InfoArchivo
 
-func FormatearPermisos(p [3]byte) string {
-    var res [3]string
-    for i := 0; i < 3; i++ {
-        r := p[i]
-        var s string
-        if r&4 != 0 {
-            s += "r"
-        } else {
-            s += "-"
+    for i := 0; i < DIRECT_BLOCKS; i++ {
+        blockIdx := ino.I_block[i]
+        if blockIdx < 0 {
+            break
         }
-        if r&2 != 0 {
-            s += "w"
-        } else {
-            s += "-"
+        
+        bc, ok := LeerBloqueCarpeta(f, sb, blockIdx)
+        if ok {
+            for _, content := range bc.B_content {
+                name := trimBytes(content.B_name[:])
+                if name != "" && name != "." && name != ".." {
+                    childIno, ok := ObtenerInodo(f, sb, int(content.B_inodo))
+                    if ok {
+                        info := InfoArchivo{
+                            Nombre:       name,
+                            Propietario:  fmt.Sprintf("%d", childIno.I_uid),
+                            Grupo:        fmt.Sprintf("%d", childIno.I_gid),
+                            Size:         childIno.I_s,
+                            Permisos:     fmt.Sprintf("%o", childIno.I_perm),
+                            Creacion:     trimBytes(childIno.I_ctime[:]),
+                            Modificacion: trimBytes(childIno.I_mtime[:]),
+                        }
+                        
+                        if EsCarpeta(childIno) {
+                            info.Tipo = "d"
+                        } else {
+                            info.Tipo = "f"
+                        }
+                        
+                        archivos = append(archivos, info)
+                    }
+                }
+            }
         }
-        if r&1 != 0 {
-            s += "x"
-        } else {
-            s += "-"
-        }
-        res[i] = s
     }
-    return fmt.Sprintf("%s%s%s", res[0], res[1], res[2])
+
+    return archivos, nil
 }

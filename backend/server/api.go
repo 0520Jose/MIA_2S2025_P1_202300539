@@ -38,14 +38,31 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
             fullOutput.WriteString("\n")
             continue
         }
+        
         if strings.HasPrefix(trimmed, "#") {
             fullOutput.WriteString(line + "\n")
             continue
         }
 
-        output := commands.ExecuteCommand(line)
-        if output != "" {
-            fullOutput.WriteString(output + "\n")
+        var command string
+        var comment string
+        
+        if commentIndex := strings.Index(line, "#"); commentIndex != -1 {
+            command = strings.TrimSpace(line[:commentIndex])
+            comment = line[commentIndex:]
+        } else {
+            command = trimmed
+        }
+
+        if command != "" {
+            output := commands.ExecuteCommand(command)
+            if output != "" {
+                fullOutput.WriteString(output + "\n")
+            }
+        }
+
+        if comment != "" {
+            fullOutput.WriteString(comment + "\n")
         }
     }
 

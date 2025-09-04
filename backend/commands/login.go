@@ -2,7 +2,6 @@ package commands
 
 import (
     "backend/structs"
-    "encoding/binary"
     "fmt"
     "os"
     "strconv"
@@ -43,27 +42,11 @@ func Login(params map[string]string) string {
         return "Error: parámetros -user/-usr, -pass/-pwd e -id son obligatorios"
     }
 
-    var pm *structs.PartitionMount
-    for i := range structs.Particiones_Montadas {
-        if structs.Particiones_Montadas[i].Id == id {
-            pm = &structs.Particiones_Montadas[i]
-            break
-        }
-    }
-    if pm == nil {
-        return fmt.Sprintf("Error: partición con ID %s no está montada", id)
-    }
-
-    f, err := os.Open(pm.Path)
+    f, sb, err := CargarSistemaEXT2(id)
     if err != nil {
-        return fmt.Sprintf("Error al abrir el disco: %v", err)
+        return fmt.Sprintf("Error: %v", err)
     }
     defer f.Close()
-
-    sb, err := CargarSuperBloque(f, pm.Partition.Part_start)
-    if err != nil {
-        return fmt.Sprintf("Error al cargar el superbloque: %v", err)
-    }
 
     contenido, err := LeerArchivoUsersTXT(f, sb)
     if err != nil {
@@ -135,34 +118,71 @@ func GetCurrentUser() *UserSession {
     return usuarioActual
 }
 
-func CargarSuperBloque(f *os.File, partStart int32) (*structs.SuperBloque, error) {
-    if _, err := f.Seek(int64(partStart), 0); err != nil {
-        return nil, fmt.Errorf("error al buscar superbloque: %v", err)
+func LeerArchivoUsersTXT(f *os.File, sb *structs.SuperBloque) (string, error) {
+    ino, err := readInode(f, sb, 2)
+    if err != nil {
+        return "", err
     }
-    var sb structs.SuperBloque
-    if err := binary.Read(f, binary.LittleEndian, &sb); err != nil {
-        return nil, fmt.Errorf("error al leer superbloque: %v", err)
+    
+    if ino.I_type[0] != 1 {
+        return "", fmt.Errorf("users.txt no es un archivo")
     }
-    if sb.S_magic != 0xEF53 {
-        return nil, fmt.Errorf("sistema de archivos no válido (magic: 0x%X)", sb.S_magic)
+    
+    var contenido []byte
+    remaining := int(ino.I_s)
+    
+    for i := 0; i < DIRECT_BLOCKS && remaining > 0; i++ {
+        if ino.I_block[i] == -1 {
+            break
+        }
+        
+        bloque, err := readFileBlock(f, sb, ino.I_block[i])
+        if err != nil {
+            return "", err
+        }
+        
+        chunk := 64
+        if chunk > remaining {
+            chunk = remaining
+        }
+        contenido = append(contenido, bloque.B_content[:chunk]...)
+        remaining -= chunk
     }
-    return &sb, nil
+    
+    if remaining > 0 && ino.I_block[INDIRECT_SIMPLE] != -1 {
+        pointers, err := readPointerBlock(f, sb, ino.I_block[INDIRECT_SIMPLE])
+        if err != nil {
+            return "", err
+        }
+        
+        for i := 0; i < 16 && remaining > 0; i++ {
+            if pointers.B_pointers[i] == -1 {
+                break
+            }
+            
+            bloque, err := readFileBlock(f, sb, pointers.B_pointers[i])
+            if err != nil {
+                return "", err
+            }
+            
+            chunk := 64
+            if chunk > remaining {
+                chunk = remaining
+            }
+            contenido = append(contenido, bloque.B_content[:chunk]...)
+            remaining -= chunk
+        }
+    }
+    
+    return string(contenido), nil
 }
 
-
-
-func firstNonEmpty(a, b string) string {
-    if strings.TrimSpace(a) != "" {
-        return a
+func readFileBlock(f *os.File, sb *structs.SuperBloque, blockIdx int32) (structs.BArchivo, error) {
+    var bloque structs.BArchivo
+    offset := int64(sb.S_block_start) + int64(blockIdx)*int64(sb.S_block_s)
+    if _, err := f.Seek(offset, 0); err != nil {
+        return bloque, err
     }
-    return b
-}
-
-func unquoteValue(s string) string {
-    v := strings.TrimSpace(s)
-    if len(v) >= 2 && ((strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"")) ||
-        (strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'"))) {
-        return v[1 : len(v)-1]
-    }
-    return v
+    err := structs.ReadBinaryStruct(f, &bloque)
+    return bloque, err
 }

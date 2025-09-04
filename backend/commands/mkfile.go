@@ -6,8 +6,14 @@ import (
     "fmt"
     "io"
     "os"
-    "path/filepath"
     "strings"
+)
+
+const (
+    DIRECT_BLOCKS = 12
+    INDIRECT_SIMPLE = 12
+    INDIRECT_DOUBLE = 13
+    INDIRECT_TRIPLE = 14
 )
 
 func Mkfile(params map[string]string) string {
@@ -66,7 +72,7 @@ func Mkfile(params map[string]string) string {
     if nombre == "" {
         return "Error: nombre de archivo vacío."
     }
-    if len(nombre) > len(structs.BContent{}.B_name) {
+    if len(nombre) > 12 {
         return "Error: nombre de archivo excede 12 caracteres."
     }
 
@@ -102,34 +108,6 @@ func Mkfile(params map[string]string) string {
         return "Error al reservar inodo: " + err.Error()
     }
 
-    blocksNeeded := 0
-    if len(data) > 0 {
-        blocksNeeded = (len(data) + len(structs.BArchivo{}.B_content) - 1) / len(structs.BArchivo{}.B_content)
-    }
-
-    usadoBlocks := make([]int32, 0, blocksNeeded)
-    offset := 0
-    for i := 0; i < blocksNeeded; i++ {
-        blk, err := allocBlock(disk, sb)
-        if err != nil {
-            return "Error al reservar bloque: " + err.Error()
-        }
-        usadoBlocks = append(usadoBlocks, blk)
-        chunk := len(structs.BArchivo{}.B_content)
-        if offset+chunk > len(data) {
-            chunk = len(data) - offset
-        }
-        var b structs.BArchivo
-        for j := range b.B_content {
-            b.B_content[j] = 0
-        }
-        copy(b.B_content[:], data[offset:offset+chunk])
-        if err := writeFileBlock(disk, sb, blk, &b); err != nil {
-            return "Error al escribir bloque de datos: " + err.Error()
-        }
-        offset += chunk
-    }
-
     var ino structs.Inodo
     ino.I_uid = int32(usuarioActual.UID)
     ino.I_gid = int32(usuarioActual.GID)
@@ -141,11 +119,12 @@ func Mkfile(params map[string]string) string {
     for i := range ino.I_block {
         ino.I_block[i] = -1
     }
-    for i := 0; i < len(usadoBlocks) && i < len(ino.I_block); i++ {
-        ino.I_block[i] = usadoBlocks[i]
-    }
     ino.I_type[0] = 1
     ino.I_perm = [3]byte{6, 6, 4}
+
+    if err := asignarBloquesArchivo(disk, sb, &ino, data); err != nil {
+        return "Error al asignar bloques: " + err.Error()
+    }
 
     if err := writeInode(disk, sb, inodeIdx, &ino); err != nil {
         return "Error al escribir inodo de archivo: " + err.Error()
@@ -155,90 +134,159 @@ func Mkfile(params map[string]string) string {
         return "Error al agregar entrada en directorio: " + err.Error()
     }
 
-    if err := writeSuperBlock(disk, pm.Partition.Part_start, sb); err != nil {
+    if err := writeSuperBlock(disk, sb, int64(pm.Partition.Part_start)); err != nil {
         return "Error al actualizar superbloque: " + err.Error()
     }
 
     return "Archivo creado exitosamente"
 }
 
-func splitPathComponents(p string) []string {
-    p = filepath.Clean(p)
-    parts := strings.Split(p, "/")
-    res := make([]string, 0, len(parts))
-    for _, s := range parts {
-        if s == "" {
-            continue
-        }
-        res = append(res, s)
-    }
-    return res
-}
+func asignarBloquesArchivo(f *os.File, sb *structs.SuperBloque, ino *structs.Inodo, data []byte) error {
+    blocksNeeded := (len(data) + 63) / 64
+    blockIndex := 0
 
-func ensureParentDir(f *os.File, sb *structs.SuperBloque, parts []string, recursive bool) (int32, error) {
-    curr := int32(0)
-    for _, name := range parts {
-        if strings.TrimSpace(name) == "" {
-            continue
-        }
-        idx, err := findEntryInDir(f, sb, curr, name)
+    for i := 0; i < DIRECT_BLOCKS && blockIndex < blocksNeeded; i++ {
+        blk, err := allocBlock(f, sb)
         if err != nil {
-            return -1, err
+            return err
         }
-        if idx >= 0 {
-            ino, err := readInode(f, sb, int32(idx))
+        ino.I_block[i] = blk
+
+        start := blockIndex * 64
+        end := start + 64
+        if end > len(data) {
+            end = len(data)
+        }
+
+        var blockData structs.BArchivo
+        copy(blockData.B_content[:], data[start:end])
+
+        if err := structs.EscribirBloqueArchivo(f, sb, blk, &blockData); err != nil {
+            return err
+        }
+        blockIndex++
+    }
+
+    if blockIndex < blocksNeeded {
+        blk, err := allocBlock(f, sb)
+        if err != nil {
+            return err
+        }
+        ino.I_block[INDIRECT_SIMPLE] = blk
+
+        var pointers structs.BApuntadores
+        for i := range pointers.B_pointers {
+            pointers.B_pointers[i] = -1
+        }
+
+        ptrIndex := 0
+        for blockIndex < blocksNeeded && ptrIndex < 16 {
+            dataBlk, err := allocBlock(f, sb)
             if err != nil {
-                return -1, err
+                return err
             }
-            if ino.I_type[0] != 0 {
-                return -1, fmt.Errorf("ya existe un archivo con el nombre '%s'", name)
+            pointers.B_pointers[ptrIndex] = dataBlk
+
+            start := blockIndex * 64
+            end := start + 64
+            if end > len(data) {
+                end = len(data)
             }
-            curr = int32(idx)
-            continue
+
+            var blockData structs.BArchivo
+            copy(blockData.B_content[:], data[start:end])
+
+            if err := structs.EscribirBloqueArchivo(f, sb, dataBlk, &blockData); err != nil {
+                return err
+            }
+            blockIndex++
+            ptrIndex++
         }
-        if !recursive {
-            return -1, fmt.Errorf("carpeta padre '%s' no existe", name)
+
+        if err := structs.EscribirBloqueApuntadores(f, sb, blk, &pointers); err != nil {
+            return err
         }
-        parentIno, err := readInode(f, sb, curr)
-        if err != nil {
-            return -1, err
-        }
-        if !Permisos(&parentIno, permWrite) && !EsRoot() {
-            return -1, fmt.Errorf("permiso denegado para crear carpeta '%s'", name)
-        }
-        newIno, err := createDirectory(f, sb, curr, name)
-        if err != nil {
-            return -1, err
-        }
-        curr = newIno
     }
-    return curr, nil
+
+    if blockIndex < blocksNeeded {
+        blk, err := allocBlock(f, sb)
+        if err != nil {
+            return err
+        }
+        ino.I_block[INDIRECT_DOUBLE] = blk
+
+        var level1Pointers structs.BApuntadores
+        for i := range level1Pointers.B_pointers {
+            level1Pointers.B_pointers[i] = -1
+        }
+
+        level1Index := 0
+        for blockIndex < blocksNeeded && level1Index < 16 {
+            level2Blk, err := allocBlock(f, sb)
+            if err != nil {
+                return err
+            }
+            level1Pointers.B_pointers[level1Index] = level2Blk
+
+            var level2Pointers structs.BApuntadores
+            for i := range level2Pointers.B_pointers {
+                level2Pointers.B_pointers[i] = -1
+            }
+
+            level2Index := 0
+            for blockIndex < blocksNeeded && level2Index < 16 {
+                dataBlk, err := allocBlock(f, sb)
+                if err != nil {
+                    return err
+                }
+                level2Pointers.B_pointers[level2Index] = dataBlk
+
+                start := blockIndex * 64
+                end := start + 64
+                if end > len(data) {
+                    end = len(data)
+                }
+
+                var blockData structs.BArchivo
+                copy(blockData.B_content[:], data[start:end])
+
+                if err := structs.EscribirBloqueArchivo(f, sb, dataBlk, &blockData); err != nil {
+                    return err
+                }
+                blockIndex++
+                level2Index++
+            }
+
+            if err := structs.EscribirBloqueApuntadores(f, sb, level2Blk, &level2Pointers); err != nil {
+                return err
+            }
+            level1Index++
+        }
+
+        if err := structs.EscribirBloqueApuntadores(f, sb, blk, &level1Pointers); err != nil {
+            return err
+        }
+    }
+
+    return nil
 }
 
-func findEntryInDir(f *os.File, sb *structs.SuperBloque, dirIno int32, name string) (int, error) {
-    ino, err := readInode(f, sb, dirIno)
-    if err != nil {
-        return -1, err
+func readPointerBlock(f *os.File, sb *structs.SuperBloque, blk int32) (structs.BApuntadores, error) {
+    var pointers structs.BApuntadores
+    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
+    if _, err := f.Seek(off, io.SeekStart); err != nil {
+        return pointers, err
     }
-    for _, b := range ino.I_block {
-        if b < 0 {
-            continue
-        }
-        dir, err := readDirBlock(f, sb, b)
-        if err != nil {
-            return -1, err
-        }
-        for _, e := range dir.B_content {
-            if e.B_inodo < 0 {
-                continue
-            }
-            en := strings.TrimRight(string(e.B_name[:]), "\x00")
-            if en == name {
-                return int(e.B_inodo), nil
-            }
-        }
+    err := binary.Read(f, binary.LittleEndian, &pointers)
+    return pointers, err
+}
+
+func writePointerBlock(f *os.File, sb *structs.SuperBloque, blk int32, pointers *structs.BApuntadores) error {
+    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
+    if _, err := f.Seek(off, io.SeekStart); err != nil {
+        return err
     }
-    return -1, nil
+    return binary.Write(f, binary.LittleEndian, pointers)
 }
 
 func createDirectory(f *os.File, sb *structs.SuperBloque, parentIno int32, name string) (int32, error) {
@@ -288,140 +336,4 @@ func createDirectory(f *os.File, sb *structs.SuperBloque, parentIno int32, name 
         return -1, err
     }
     return idxIno, nil
-}
-
-func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string, childIno int32) error {
-    ino, err := readInode(f, sb, dirIno)
-    if err != nil {
-        return err
-    }
-    for bi := 0; bi < len(ino.I_block); bi++ {
-        b := ino.I_block[bi]
-        if b < 0 {
-            nb, err := allocBlock(f, sb)
-            if err != nil {
-                return err
-            }
-            var newDir structs.BCarpeta
-            for i := range newDir.B_content {
-                newDir.B_content[i].B_inodo = -1
-                for j := range newDir.B_content[i].B_name {
-                    newDir.B_content[i].B_name[j] = 0
-                }
-            }
-            ino.I_block[bi] = nb
-            if err := writeInode(f, sb, dirIno, &ino); err != nil {
-                return err
-            }
-            if err := writeDirBlock(f, sb, nb, &newDir); err != nil {
-                return err
-            }
-            b = nb
-        }
-        dir, err := readDirBlock(f, sb, b)
-        if err != nil {
-            return err
-        }
-        for i := range dir.B_content {
-            if dir.B_content[i].B_inodo < 0 {
-                dir.B_content[i].B_inodo = childIno
-                for j := range dir.B_content[i].B_name {
-                    dir.B_content[i].B_name[j] = 0
-                }
-                copy(dir.B_content[i].B_name[:], name)
-                if err := writeDirBlock(f, sb, b, &dir); err != nil {
-                    return err
-                }
-                return nil
-            }
-        }
-    }
-    return fmt.Errorf("directorio sin espacio para nuevas entradas")
-}
-
-func allocInode(f *os.File, sb *structs.SuperBloque) (int32, error) {
-    bm := make([]byte, sb.S_inodes_count)
-    if _, err := f.ReadAt(bm, int64(sb.S_bm_inode_start)); err != nil {
-        return -1, err
-    }
-    for i := 0; i < int(sb.S_inodes_count); i++ {
-        if bm[i] == 0 {
-            bm[i] = 1
-            if _, err := f.WriteAt(bm, int64(sb.S_bm_inode_start)); err != nil {
-                return -1, err
-            }
-            sb.S_free_inodes_count--
-            sb.S_first_ino = nextFreeIndex(bm)
-            return int32(i), nil
-        }
-    }
-    return -1, fmt.Errorf("No hay inodos disponibles")
-}
-
-func allocBlock(f *os.File, sb *structs.SuperBloque) (int32, error) {
-    bm := make([]byte, sb.S_blocks_count)
-    if _, err := f.ReadAt(bm, int64(sb.S_bm_block_start)); err != nil {
-        return -1, err
-    }
-    for i := 0; i < int(sb.S_blocks_count); i++ {
-        if bm[i] == 0 {
-            bm[i] = 1
-            if _, err := f.WriteAt(bm, int64(sb.S_bm_block_start)); err != nil {
-                return -1, err
-            }
-            sb.S_free_blocks_count--
-            sb.S_first_blo = nextFreeIndex(bm)
-            return int32(i), nil
-        }
-    }
-    return -1, fmt.Errorf("No hay bloques disponibles")
-}
-
-func nextFreeIndex(bm []byte) int32 {
-    for i := 0; i < len(bm); i++ {
-        if bm[i] == 0 {
-            return int32(i)
-        }
-    }
-    return -1
-}
-
-func writeInode(f *os.File, sb *structs.SuperBloque, idx int32, ino *structs.Inodo) error {
-    off := int64(sb.S_inode_start) + int64(idx)*int64(sb.S_inode_s)
-    if _, err := f.Seek(off, io.SeekStart); err != nil {
-        return err
-    }
-    return binary.Write(f, binary.LittleEndian, ino)
-}
-
-func writeDirBlock(f *os.File, sb *structs.SuperBloque, blk int32, dir *structs.BCarpeta) error {
-    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
-    if _, err := f.Seek(off, io.SeekStart); err != nil {
-        return err
-    }
-    return binary.Write(f, binary.LittleEndian, dir)
-}
-
-func writeFileBlock(f *os.File, sb *structs.SuperBloque, blk int32, b *structs.BArchivo) error {
-    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
-    if _, err := f.Seek(off, io.SeekStart); err != nil {
-        return err
-    }
-    return binary.Write(f, binary.LittleEndian, b)
-}
-
-func writeSuperBlock(f *os.File, partStart int32, sb *structs.SuperBloque) error {
-    if _, err := f.Seek(int64(partStart), io.SeekStart); err != nil {
-        return err
-    }
-    return binary.Write(f, binary.LittleEndian, sb)
-}
-
-func getMountByID(id string) *structs.PartitionMount {
-    for i := range structs.Particiones_Montadas {
-        if structs.Particiones_Montadas[i].Id == id {
-            return &structs.Particiones_Montadas[i]
-        }
-    }
-    return nil
 }

@@ -48,7 +48,7 @@ func Mount(params map[string]string) string {
     }
     defer archivo.Close()
 
-    mbr, err := structs.LeerMBR(archivo)
+    mbr, err := structs.LeerMBR(path)
     if err != nil {
         return fmt.Sprintf("Error leyendo MBR: %v\n", err)
     }

@@ -4,172 +4,142 @@ import (
     "backend/structs"
     "encoding/binary"
     "fmt"
+    "io"
     "os"
     "sort"
+    "strconv"
     "strings"
 )
 
 func Cat(params map[string]string) string {
-    sess := GetCurrentUser()
-    if sess == nil {
+    if usuarioActual == nil {
         return "Error: No hay una sesión activa."
     }
-
-    files := make([]string, 0)
+    
+    // Recopilar todos los archivos -fileN
+    fileParams := make(map[int]string)
+    hasFiles := false
+    
     for k, v := range params {
         lk := strings.ToLower(strings.TrimSpace(k))
-        if lk == "-file" || strings.HasPrefix(lk, "-file") {
-            p := strings.TrimSpace(v)
-            if p != "" {
-                files = append(files, p)
+        if lk == "-file" {
+            // -file sin número es -file1
+            fileParams[1] = strings.TrimSpace(v)
+            hasFiles = true
+        } else if strings.HasPrefix(lk, "-file") {
+            // Extraer el número de -fileN
+            numStr := strings.TrimPrefix(lk, "-file")
+            if num, err := strconv.Atoi(numStr); err == nil && num > 0 {
+                fileParams[num] = strings.TrimSpace(v)
+                hasFiles = true
             }
         }
     }
-    if len(files) == 0 {
-        return "Error: debe especificar al menos un parámetro -file o -fileN."
+    
+    if !hasFiles {
+        return "Error: parámetro -file es obligatorio."
     }
-    sort.Strings(files)
-
-    var pm *structs.PartitionMount
-    for i := range structs.Particiones_Montadas {
-        if structs.Particiones_Montadas[i].Id == sess.PartitionID {
-            pm = &structs.Particiones_Montadas[i]
-            break
+    
+    // Ordenar los archivos por número para procesarlos en orden
+    var fileNumbers []int
+    for num := range fileParams {
+        fileNumbers = append(fileNumbers, num)
+    }
+    sort.Ints(fileNumbers)
+    
+    disk, sb, err := CargarSistemaEXT2(usuarioActual.PartitionID)
+    if err != nil {
+        return fmt.Sprintf("Error: %v", err)
+    }
+    defer disk.Close()
+    
+    var results []string
+    
+    // Procesar cada archivo en orden
+    for _, num := range fileNumbers {
+        path := unquoteValue(fileParams[num])
+        if path == "" {
+            continue
         }
-    }
-    if pm == nil {
-        return "Error: la partición de la sesión no está montada."
-    }
-
-    f, err := os.Open(pm.Path)
-    if err != nil {
-        return fmt.Sprintf("Error al abrir el disco: %v", err)
-    }
-    defer f.Close()
-
-    sb, err := readSuperBlock(f, pm.Partition.Part_start)
-    if err != nil {
-        return fmt.Sprintf("Error al leer superbloque: %v", err)
-    }
-
-    var out []string
-    for _, path := range files {
+        
         if !strings.HasPrefix(path, "/") {
-            out = append(out, fmt.Sprintf("Error: ruta inválida '%s' (debe iniciar con /)", path))
+            results = append(results, fmt.Sprintf("Error: ruta inválida '%s' (debe iniciar con /)", path))
             continue
         }
-        inoIdx, err := findInodeByPath(f, sb, path)
+        
+        // Manejar ruta especial para users.txt
+        if path == "/users.txt" {
+            path = "/home/users.txt"
+        }
+        
+        inoIdx, err := findInodeByPath(disk, sb, path)
         if err != nil {
-            out = append(out, fmt.Sprintf("Error: %s -> %v", path, err))
+            results = append(results, fmt.Sprintf("Error: %s -> %v", path, err))
             continue
         }
-        content, err := readFileContent(f, sb, inoIdx)
+        
+        content, err := readFileContentWithIndirect(disk, sb, inoIdx)
         if err != nil {
-            out = append(out, fmt.Sprintf("Error: %s -> %v", path, err))
+            results = append(results, fmt.Sprintf("Error: %s -> %v", path, err))
             continue
         }
-        out = append(out, content)
+        
+        results = append(results, content)
     }
-    return strings.Join(out, "\n")
-}
-
-func readSuperBlock(f *os.File, partStart int32) (*structs.SuperBloque, error) {
-    if _, err := f.Seek(int64(partStart), 0); err != nil {
-        return nil, err
-    }
-    var sb structs.SuperBloque
-    if err := binary.Read(f, binary.LittleEndian, &sb); err != nil {
-        return nil, err
-    }
-    if sb.S_magic != 0xEF53 {
-        return nil, fmt.Errorf("FS inválido (magic=0x%X)", sb.S_magic)
-    }
-    return &sb, nil
-}
-
-func readInode(f *os.File, sb *structs.SuperBloque, idx int32) (structs.Inodo, error) {
-    var ino structs.Inodo
-    off := int64(sb.S_inode_start) + int64(idx)*int64(sb.S_inode_s)
-    if _, err := f.Seek(off, 0); err != nil {
-        return ino, err
-    }
-    if err := binary.Read(f, binary.LittleEndian, &ino); err != nil {
-        return ino, err
-    }
-    return ino, nil
-}
-
-func readDirBlock(f *os.File, sb *structs.SuperBloque, blk int32) (structs.BCarpeta, error) {
-    var dir structs.BCarpeta
-    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
-    if _, err := f.Seek(off, 0); err != nil {
-        return dir, err
-    }
-    if err := binary.Read(f, binary.LittleEndian, &dir); err != nil {
-        return dir, err
-    }
-    return dir, nil
-}
-
-func readFileBlock(f *os.File, sb *structs.SuperBloque, blk int32) (structs.BArchivo, error) {
-    var fb structs.BArchivo
-    off := int64(sb.S_block_start) + int64(blk)*int64(sb.S_block_s)
-    if _, err := f.Seek(off, 0); err != nil {
-        return fb, err
-    }
-    if err := binary.Read(f, binary.LittleEndian, &fb); err != nil {
-        return fb, err
-    }
-    return fb, nil
+    
+    // Unir todos los contenidos con salto de línea
+    return strings.Join(results, "\n")
 }
 
 func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, error) {
     parts := strings.Split(path, "/")
     curr := int32(0)
-    empty := true
-    for _, p := range parts[1:] {
-        if strings.TrimSpace(p) != "" {
-            empty = false
-            break
-        }
-    }
-    if empty {
+    
+    // Verificar si es solo la raíz "/"
+    if len(parts) <= 1 || (len(parts) == 2 && parts[1] == "") {
         return curr, nil
     }
-    lastIdx := len(parts[1:]) - 1
+    
+    // Navegar por cada parte del path
     for i, name := range parts[1:] {
         name = strings.TrimSpace(name)
         if name == "" {
             continue
         }
+        
         ino, err := readInode(f, sb, curr)
         if err != nil {
             return -1, fmt.Errorf("leer inodo %d: %v", curr, err)
         }
-        if i < lastIdx {
+        
+        // Si no es el último elemento, debe ser un directorio
+        if i < len(parts[1:])-1 {
             if ino.I_type[0] != 0 {
-                return -1, fmt.Errorf("No es un directorio")
+                return -1, fmt.Errorf("%s no es un directorio", name)
             }
             if !Permisos(&ino, permExec) {
-                return -1, fmt.Errorf("permiso denegado al recorrer directorio")
+                return -1, fmt.Errorf("permiso denegado al acceder directorio %s", name)
             }
         }
+        
         found := int32(-1)
-        for _, b := range ino.I_block {
-            if b < 0 {
+        for _, blockIdx := range ino.I_block {
+            if blockIdx < 0 {
                 continue
             }
-            dir, err := readDirBlock(f, sb, b)
+            
+            dir, err := readDirBlock(f, sb, blockIdx)
             if err != nil {
-                return -1, fmt.Errorf("leer bloque de carpeta %d: %v", b, err)
+                continue
             }
-            for _, e := range dir.B_content {
-                if e.B_inodo < 0 {
+            
+            for _, entry := range dir.B_content {
+                if entry.B_inodo < 0 {
                     continue
                 }
-                ename := strings.TrimRight(string(e.B_name[:]), "\x00")
-                if ename == name {
-                    found = e.B_inodo
+                entryName := strings.TrimRight(string(entry.B_name[:]), "\x00")
+                if entryName == name {
+                    found = entry.B_inodo
                     break
                 }
             }
@@ -177,56 +147,94 @@ func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, e
                 break
             }
         }
+        
         if found < 0 {
             return -1, fmt.Errorf("entrada no encontrada: %s", name)
         }
         curr = found
     }
+    
     return curr, nil
 }
 
-func readFileContent(f *os.File, sb *structs.SuperBloque, inoIdx int32) (string, error) {
+func readFileContentWithIndirect(f *os.File, sb *structs.SuperBloque, inoIdx int32) (string, error) {
     ino, err := readInode(f, sb, inoIdx)
     if err != nil {
         return "", err
     }
+    
     if ino.I_type[0] != 1 {
-        return "", fmt.Errorf("No es un archivo")
+        return "", fmt.Errorf("no es un archivo")
     }
+    
     if !Permisos(&ino, permRead) {
         return "", fmt.Errorf("permiso denegado para leer el archivo")
     }
-    var buf []byte
+    
+    var contenido []byte
     remaining := int(ino.I_s)
-    for _, b := range ino.I_block {
-        if b < 0 {
-            continue
+    
+    // Leer bloques directos
+    for i := 0; i < DIRECT_BLOCKS && remaining > 0; i++ {
+        if ino.I_block[i] == -1 {
+            break
         }
-        fb, err := readFileBlock(f, sb, b)
+        
+        bloque, err := readFileBlock(f, sb, ino.I_block[i])
         if err != nil {
             return "", err
         }
-        if remaining > 0 {
-            toCopy := remaining
-            if toCopy > len(fb.B_content) {
-                toCopy = len(fb.B_content)
-            }
-            buf = append(buf, fb.B_content[:toCopy]...)
-            remaining -= toCopy
-            if remaining <= 0 {
+        
+        chunk := 64
+        if chunk > remaining {
+            chunk = remaining
+        }
+        contenido = append(contenido, bloque.B_content[:chunk]...)
+        remaining -= chunk
+    }
+    
+    // Leer indirección simple si es necesario
+    if remaining > 0 && ino.I_block[INDIRECT_SIMPLE] != -1 {
+        pointers, err := readPointerBlock(f, sb, ino.I_block[INDIRECT_SIMPLE])
+        if err != nil {
+            return "", err
+        }
+        
+        for i := 0; i < 16 && remaining > 0; i++ {
+            if pointers.B_pointers[i] == -1 {
                 break
             }
-        } else {
-            for _, c := range fb.B_content {
-                if c == 0 {
-                    break
-                }
-                buf = append(buf, c)
+            
+            bloque, err := readFileBlock(f, sb, pointers.B_pointers[i])
+            if err != nil {
+                return "", err
             }
+            
+            chunk := 64
+            if chunk > remaining {
+                chunk = remaining
+            }
+            contenido = append(contenido, bloque.B_content[:chunk]...)
+            remaining -= chunk
         }
     }
-    if int(ino.I_s) > 0 && len(buf) > int(ino.I_s) {
-        buf = buf[:ino.I_s]
+    
+    return strings.TrimRight(string(contenido), "\x00"), nil
+}
+
+func readDirBlock(f *os.File, sb *structs.SuperBloque, blockIdx int32) (structs.BCarpeta, error) {
+    var bc structs.BCarpeta
+    offset := int64(sb.S_block_start) + int64(blockIdx)*64
+    if _, err := f.Seek(offset, io.SeekStart); err != nil {
+        return bc, err
     }
-    return strings.TrimRight(string(buf), "\x00"), nil
+    err := binary.Read(f, binary.LittleEndian, &bc)
+    return bc, err
+}
+
+func firstNonEmpty(a, b string) string {
+    if strings.TrimSpace(a) != "" {
+        return a
+    }
+    return b
 }
