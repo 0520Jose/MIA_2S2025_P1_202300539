@@ -347,8 +347,9 @@ func GetBitmapBlocks(f *os.File, sb *SuperBloque) []byte {
 func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
     var b strings.Builder
     b.WriteString("digraph G {\n")
-    b.WriteString("  node [shape=plaintext, fontname=\"Arial\"];\n")
+    b.WriteString("  node [shape=plaintext, fontname=\"Helvetica\"];\n")
     b.WriteString("  rankdir=TB;\n")
+    b.WriteString("  edge [color=\"#4a90e2\" penwidth=2 arrowhead=vee];\n")
     
     visited := map[int]bool{}
     visitedBlocks := map[int]bool{}
@@ -367,19 +368,20 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
         }
         
         b.WriteString(fmt.Sprintf("  inode%d [label=<\n", idx))
-        b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightblue'>\n")
-        b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>INODO %d</b></td></tr>\n", idx))
-        b.WriteString(fmt.Sprintf("      <tr><td>i_type</td><td>%d</td></tr>\n", ino.I_type[0]))
+        b.WriteString("    <table border='1' cellborder='1' cellspacing='0' cellpadding='6' bgcolor='#f9f9f9'>\n")
+        b.WriteString(fmt.Sprintf("      <tr><td colspan='2' bgcolor='#4a90e2'><font color='white'><b>INODO %d</b></font></td></tr>\n", idx))
+        b.WriteString(fmt.Sprintf("      <tr><td><b>i_type</b></td><td>%d</td></tr>\n", ino.I_type[0]))
         
         for i := 0; i < DIRECT_BLOCKS; i++ {
-            b.WriteString(fmt.Sprintf("      <tr><td>ap%d (directo)</td><td>%d</td></tr>\n", i, ino.I_block[i]))
+            b.WriteString(fmt.Sprintf("      <tr><td PORT='ap%d'><b>ap%d (directo)</b></td><td>%d</td></tr>\n",
+                i, i, ino.I_block[i]))
         }
         
-        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (indirecto)</td><td>%d</td></tr>\n", INDIRECT_SIMPLE, ino.I_block[INDIRECT_SIMPLE]))
-        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (doble ind.)</td><td>%d</td></tr>\n", INDIRECT_DOUBLE, ino.I_block[INDIRECT_DOUBLE]))
-        b.WriteString(fmt.Sprintf("      <tr><td>ap%d (triple ind.)</td><td>%d</td></tr>\n", INDIRECT_TRIPLE, ino.I_block[INDIRECT_TRIPLE]))
+        b.WriteString(fmt.Sprintf("      <tr><td PORT='ap%d'><b>ap%d (indirecto)</b></td><td>%d</td></tr>\n", INDIRECT_SIMPLE, INDIRECT_SIMPLE, ino.I_block[INDIRECT_SIMPLE]))
+        b.WriteString(fmt.Sprintf("      <tr><td PORT='ap%d'><b>ap%d (doble ind.)</b></td><td>%d</td></tr>\n", INDIRECT_DOUBLE, INDIRECT_DOUBLE, ino.I_block[INDIRECT_DOUBLE]))
+        b.WriteString(fmt.Sprintf("      <tr><td PORT='ap%d'><b>ap%d (triple ind.)</b></td><td>%d</td></tr>\n", INDIRECT_TRIPLE, INDIRECT_TRIPLE, ino.I_block[INDIRECT_TRIPLE]))
         
-        b.WriteString(fmt.Sprintf("      <tr><td>i_perm</td><td>%d</td></tr>\n", ino.I_perm))
+        b.WriteString(fmt.Sprintf("      <tr><td><b>i_perm</b></td><td>%d</td></tr>\n", ino.I_perm))
         b.WriteString("    </table>\n")
         b.WriteString("  >];\n")
         
@@ -389,7 +391,7 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloqueCarpeta(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
-                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                    b.WriteString(fmt.Sprintf("  inode%d:ap%d -> block%d;\n", idx, i, blockIdx))
                     
                     bc, ok := LeerBloqueCarpeta(f, sb, blockIdx)
                     if ok {
@@ -397,7 +399,7 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                             name := trimBytes(content.B_name[:])
                             childIdx := content.B_inodo
                             if name != "" && name != "." && name != ".." && childIdx >= 0 {
-                                b.WriteString(fmt.Sprintf("  block%d -> inode%d;\n", blockIdx, childIdx))
+                                b.WriteString(fmt.Sprintf("  block%d:child%d -> inode%d;\n", blockIdx, childIdx, childIdx))
                                 dfs(int(childIdx))
                             }
                         }
@@ -410,7 +412,7 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloqueArchivo(f, sb, &b, int(blockIdx), idx, s)
                     visitedBlocks[int(blockIdx)] = true
-                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                    b.WriteString(fmt.Sprintf("  inode%d:ap%d -> block%d;\n", idx, i, blockIdx))
                 }
             }
             
@@ -419,7 +421,7 @@ func GenerarReporteArbol(f *os.File, sb *SuperBloque, s int) string {
                 if blockIdx >= 0 && !visitedBlocks[int(blockIdx)] {
                     GenerarBloquePuntero(f, sb, &b, int(blockIdx), idx)
                     visitedBlocks[int(blockIdx)] = true
-                    b.WriteString(fmt.Sprintf("  inode%d -> block%d;\n", idx, blockIdx))
+                    b.WriteString(fmt.Sprintf("  inode%d:ap%d -> block%d;\n", idx, i, blockIdx))
                     
                     procesarBloqueIndirecto(f, sb, &b, int(blockIdx), idx, &visitedBlocks, s)
                 }
@@ -439,12 +441,12 @@ func GenerarBloquePuntero(f *os.File, sb *SuperBloque, b *strings.Builder, block
     }
 
     b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
-    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightgreen'>\n")
-    b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. apuntadores %d</b></td></tr>\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' cellpadding='6' bgcolor='#eafaf1'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td colspan='2' bgcolor='#27ae60'><font color='white'><b>Bloque apuntadores %d</b></font></td></tr>\n", blockIdx))
 
     for i := 0; i < 16; i++ {
         ptr := pointers.B_pointers[i]
-        b.WriteString(fmt.Sprintf("      <tr><td>ap_%d</td><td>%d</td></tr>\n", i, ptr))
+        b.WriteString(fmt.Sprintf("      <tr><td PORT='ap%d'><b>ap_%d</b></td><td>%d</td></tr>\n", i, i, ptr))
     }
 
     b.WriteString("    </table>\n")
@@ -458,13 +460,13 @@ func GenerarBloqueCarpeta(f *os.File, sb *SuperBloque, b *strings.Builder, block
     }
 
     b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
-    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightyellow'>\n")
-    b.WriteString(fmt.Sprintf("      <tr><td colspan='2'><b>b. carpeta %d</b></td></tr>\n", blockIdx))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' cellpadding='6' bgcolor='#fffbea'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td colspan='2' bgcolor='#f39c12'><font color='white'><b>Bloque carpeta %d</b></font></td></tr>\n", blockIdx))
 
     for _, content := range bc.B_content {
         name := trimBytes(content.B_name[:])
         if name != "" {
-            b.WriteString(fmt.Sprintf("      <tr><td>%s</td><td>%d</td></tr>\n", name, content.B_inodo))
+            b.WriteString(fmt.Sprintf("      <tr><td PORT='child%d'><b>%s</b></td><td>%d</td></tr>\n", content.B_inodo, name, content.B_inodo))
         }
     }
 
@@ -489,9 +491,9 @@ func GenerarBloqueArchivo(f *os.File, sb *SuperBloque, b *strings.Builder, block
     content = strings.ReplaceAll(content, "\"", "&quot;")
 
     b.WriteString(fmt.Sprintf("  block%d [label=<\n", blockIdx))
-    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='lightcoral'>\n")
-    b.WriteString(fmt.Sprintf("      <tr><td><b>b. archivo %d</b></td></tr>\n", blockIdx))
-    b.WriteString(fmt.Sprintf("      <tr><td align='left'><font face='monospace'>%s</font></td></tr>\n", content))
+    b.WriteString("    <table border='1' cellborder='1' cellspacing='0' cellpadding='6' bgcolor='#fdecea'>\n")
+    b.WriteString(fmt.Sprintf("      <tr><td bgcolor='#c0392b'><font color='white'><b>Bloque archivo %d</b></font></td></tr>\n", blockIdx))
+    b.WriteString(fmt.Sprintf("      <tr><td PORT='content' align='left'><font face='monospace'>%s</font></td></tr>\n", content))
     b.WriteString("    </table>\n")
     b.WriteString("  >];\n")
 }

@@ -11,7 +11,6 @@ import (
     "encoding/binary"
     "sort"
 	"time"
-    "bytes"
 )
 
 func Rep(params map[string]string) string {
@@ -365,7 +364,6 @@ func generarReporteInode(path, id string) string {
 
 func generarReporteBlock(path string, id string) string {
     f, sb, _, err := structs.SuperBloque_ID(id)
-
     if err != nil {
         return fmt.Sprintf("Error obteniendo FS: %v", err)
     }
@@ -379,49 +377,57 @@ func generarReporteBlock(path string, id string) string {
     }
 
     dotPath := filepath.Join(dir, base+".dot")
-    imgPath := filepath.Join(dir, base+".jpg")
+    imgPath := path
 
-    var b strings.Builder
-    b.WriteString("digraph G {\n")
-    b.WriteString("  node [shape=plaintext fontname=\"Arial\"];\n")
-    b.WriteString("  rankdir=LR;\n")
-    b.WriteString("  bgcolor=transparent;\n\n")
+    tiposBloques := make(map[int]string)
 
-    bitmapBloques := structs.GetBitmapBlocks(f, sb)
-    if bitmapBloques == nil {
-        return "Error: No se pudo obtener el bitmap de bloques"
-    }
+    for i := 0; i < int(sb.S_inodes_count); i++ {
+        inode, usado := structs.ObtenerInodo(f, sb, i)
+        if !usado {
+            continue
+        }
 
-    bloquesUsados := obtenerBloquesUsados(bitmapBloques, int(sb.S_blocks_count))
+        esArchivo := inode.I_type[0] == 1
+        tipoBloque := "archivo"
+        if !esArchivo {
+            tipoBloque = "carpeta"
+        }
 
-    connections := make([]string, 0)
-    
-    for _, blockNum := range bloquesUsados {
-        tipoBloque := determinarTipoBloque(f, sb, blockNum)
-        
-        switch tipoBloque {
-        case "carpeta":
-            bc, ok := structs.LeerBloqueCarpeta(f, sb, int32(blockNum))
-            if ok {
-                b.WriteString(generarTablaCarpeta(int32(blockNum), &bc))
+        for j := 0; j < 12; j++ {
+            if inode.I_block[j] >= 0 {
+                tiposBloques[int(inode.I_block[j])] = tipoBloque
             }
-            
-        case "archivo":
-            ba, ok := structs.LeerBloqueArchivo(f, sb, int32(blockNum))
+        }
+
+        if inode.I_block[12] >= 0 {
+            tiposBloques[int(inode.I_block[12])] = "apuntadores"
+
+            bp, ok := structs.ObtenerBloqueApuntadores(f, sb, int(inode.I_block[12]))
             if ok {
-                b.WriteString(generarTablaArchivo(int32(blockNum), &ba))
+                for _, ptr := range bp.B_pointers {
+                    if ptr >= 0 {
+                        tiposBloques[int(ptr)] = tipoBloque
+                    }
+                }
             }
+        }
+
+        if inode.I_block[13] >= 0 {
+            tiposBloques[int(inode.I_block[13])] = "apuntadores"
             
-        case "apuntadores":
-            if bp := leerBloqueApuntadores(f, sb, blockNum); bp != nil {
-                b.WriteString(generarTablaApuntadores(int32(blockNum), bp))
-                
-                for _, pointer := range bp.B_pointers {
-                    if pointer != -1 && pointer >= 0 && int(pointer) < int(sb.S_blocks_count) {
-                        if esBloqueUsado(bitmapBloques, int(pointer)) {
-                            connections = append(connections, 
-                                fmt.Sprintf("  Block%d -> Block%d;\n", blockNum, pointer))
-                            break
+            bp1, ok := structs.ObtenerBloqueApuntadores(f, sb, int(inode.I_block[13]))
+            if ok {
+                for _, ptr1 := range bp1.B_pointers {
+                    if ptr1 >= 0 {
+                        tiposBloques[int(ptr1)] = "apuntadores"
+                        
+                        bp2, ok := structs.ObtenerBloqueApuntadores(f, sb, int(ptr1))
+                        if ok {
+                            for _, ptr2 := range bp2.B_pointers {
+                                if ptr2 >= 0 {
+                                    tiposBloques[int(ptr2)] = tipoBloque
+                                }
+                            }
                         }
                     }
                 }
@@ -429,11 +435,51 @@ func generarReporteBlock(path string, id string) string {
         }
     }
 
-    if len(connections) > 0 {
-        b.WriteString("\n  // Conexiones entre bloques\n")
-        for _, conn := range connections {
-            b.WriteString(conn)
+    var b strings.Builder
+    b.WriteString("digraph G {\n")
+    b.WriteString("  node [shape=plaintext fontname=\"Arial\"];\n")
+    b.WriteString("  rankdir=LR;\n")
+    b.WriteString("  bgcolor=transparent;\n\n")
+    
+    bitmapBloques := structs.GetBitmapBlocks(f, sb)
+    if bitmapBloques == nil {
+        return "Error: No se pudo obtener el bitmap de bloques"
+    }
+
+    bloquesUsados := obtenerBloquesUsados(bitmapBloques, int(sb.S_blocks_count))
+    
+    for _, blockNum := range bloquesUsados {
+        tipoBloque, existe := tiposBloques[blockNum]
+        if !existe {
+            tipoBloque = detectarTipoBloqueContenido(f, sb, blockNum)
         }
+
+        switch tipoBloque {
+        case "carpeta":
+            bc, ok := structs.LeerBloqueCarpeta(f, sb, int32(blockNum))
+            if ok {
+                b.WriteString(generarTablaCarpeta(int32(blockNum), &bc))
+            }
+
+        case "archivo":
+            ba, ok := structs.LeerBloqueArchivo(f, sb, int32(blockNum))
+            if ok {
+                b.WriteString(generarTablaArchivo(int32(blockNum), &ba))
+            }
+
+        case "apuntadores":
+            bp, ok := structs.ObtenerBloqueApuntadores(f, sb, blockNum)
+            if ok {
+                b.WriteString(generarTablaApuntadores(int32(blockNum), &bp))
+            }
+        }
+    }
+    
+    b.WriteString("\n")
+    
+    for i := 0; i < len(bloquesUsados)-1; i++ {
+        b.WriteString(fmt.Sprintf("  Block%d -> Block%d [style=invis];\n", 
+            bloquesUsados[i], bloquesUsados[i+1]))
     }
 
     b.WriteString("}\n")
@@ -443,11 +489,44 @@ func generarReporteBlock(path string, id string) string {
     }
 
     cmd := exec.Command("dot", "-Tjpg", dotPath, "-o", imgPath)
-    if err := cmd.Run(); err != nil {
-        return fmt.Sprintf("Error generando imagen JPG: %v", err)
+    if output, err := cmd.CombinedOutput(); err != nil {
+        return fmt.Sprintf("Error generando imagen JPG: %v\nOutput: %s", err, string(output))
     }
 
     return fmt.Sprintf("Reporte generado: %s", imgPath)
+}
+
+func detectarTipoBloqueContenido(f *os.File, sb *structs.SuperBloque, blockNum int) string {
+    bc, okDir := structs.LeerBloqueCarpeta(f, sb, int32(blockNum))
+    if okDir {
+        validEntries := 0
+        for _, content := range bc.B_content {
+            if content.B_inodo >= 0 && content.B_inodo < sb.S_inodes_count {
+                nombre := strings.TrimRight(string(content.B_name[:]), "\x00")
+                if len(nombre) > 0 && esNombreValido(nombre) {
+                    validEntries++
+                }
+            }
+        }
+        if validEntries > 0 {
+            return "carpeta"
+        }
+    }
+
+    bp, okPtr := structs.ObtenerBloqueApuntadores(f, sb, blockNum)
+    if okPtr {
+        validPointers := 0
+        for _, ptr := range bp.B_pointers {
+            if (ptr >= 0 && ptr < sb.S_blocks_count) || ptr == -1 {
+                validPointers++
+            }
+        }
+        if validPointers >= 4 {
+            return "apuntadores"
+        }
+    }
+
+    return "archivo"
 }
 
 func obtenerBloquesUsados(bitmap []byte, totalBloques int) []int {
@@ -462,53 +541,11 @@ func obtenerBloquesUsados(bitmap []byte, totalBloques int) []int {
     return bloquesUsados
 }
 
-func esBloqueUsado(bitmap []byte, blockNum int) bool {
-    return blockNum < len(bitmap) && bitmap[blockNum] != 0
-}
-
-func determinarTipoBloque(f *os.File, sb *structs.SuperBloque, blockNum int) string {
-    data, ok := structs.ObtenerBloqueBinario(f, sb, blockNum)
-    if !ok {
-        return "desconocido"
-    }
-    
-    var potentialsPointers []int32
-    for i := 0; i < 64 && i < len(data)-3; i += 4 {
-        val := int32(data[i]) | int32(data[i+1])<<8 | int32(data[i+2])<<16 | int32(data[i+3])<<24
-        potentialsPointers = append(potentialsPointers, val)
-    }
-    
-    validPointers := 0
-    for _, ptr := range potentialsPointers {
-        if (ptr >= 0 && ptr < sb.S_blocks_count) || ptr == -1 {
-            validPointers++
-        }
-    }
-    
-    if validPointers >= len(potentialsPointers)/2 && validPointers >= 4 {
-        return "apuntadores"
-    }
-
-    var bc structs.BCarpeta
-    rdr := bytes.NewReader(data)
-    if binary.Read(rdr, binary.LittleEndian, &bc) == nil {
-        validEntries := 0
-        for _, content := range bc.B_content {
-            nombre := strings.TrimRight(string(content.B_name[:]), "\x00")
-            if len(nombre) > 0 && len(nombre) <= 11 && esNombreValido(nombre) && 
-               content.B_inodo >= 0 && content.B_inodo < sb.S_inodes_count {
-                validEntries++
-            }
-        }
-        if validEntries > 0 {
-            return "carpeta"
-        }
-    }
-    
-    return "archivo"
-}
-
 func esNombreValido(nombre string) bool {
+    if nombre == "." || nombre == ".." {
+        return true
+    }
+    
     for _, c := range nombre {
         if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
              (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == ' ') {
@@ -516,15 +553,6 @@ func esNombreValido(nombre string) bool {
         }
     }
     return true
-}
-
-func leerBloqueApuntadores(f *os.File, sb *structs.SuperBloque, blockNum int) *structs.BApuntadores {
-    bp, ok := structs.ObtenerBloqueApuntadores(f, sb, blockNum)
-    if !ok {
-        return nil
-    }
-    
-    return &bp
 }
 
 func generarTablaCarpeta(num int32, carpeta *structs.BCarpeta) string {
@@ -536,10 +564,8 @@ func generarTablaCarpeta(num int32, carpeta *structs.BCarpeta) string {
 
     for _, c := range carpeta.B_content {
         nombre := strings.TrimRight(string(c.B_name[:]), "\x00")
-        if nombre != "" {
+        if c.B_inodo >= 0 {
             tabla.WriteString(fmt.Sprintf("      <tr><td>%s</td><td>%d</td></tr>\n", nombre, c.B_inodo))
-        } else {
-            tabla.WriteString("      <tr><td></td><td></td></tr>\n")
         }
     }
 
@@ -558,7 +584,8 @@ func generarTablaArchivo(num int32, archivo *structs.BArchivo) string {
     contenido = strings.ReplaceAll(contenido, "<", "&lt;")
     contenido = strings.ReplaceAll(contenido, ">", "&gt;")
     contenido = strings.ReplaceAll(contenido, "\"", "&quot;")
-
+    contenido = strings.ReplaceAll(contenido, "\n", "<br/>")
+    
     var tabla strings.Builder
     tabla.WriteString(fmt.Sprintf("  Block%d [label=<\n", num))
     tabla.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n")
@@ -574,16 +601,25 @@ func generarTablaApuntadores(num int32, apuntadores *structs.BApuntadores) strin
     tabla.WriteString(fmt.Sprintf("  Block%d [label=<\n", num))
     tabla.WriteString("    <table border='1' cellborder='1' cellspacing='0' bgcolor='white'>\n")
     tabla.WriteString(fmt.Sprintf("      <tr><td bgcolor='#FF9800'><font color='white'><b>Bloque Apuntadores %d</b></font></td></tr>\n", num))
-
-    var valores []string
-    for _, pointer := range apuntadores.B_pointers {
-        valores = append(valores, fmt.Sprintf("%d", pointer))
-    }
+    tabla.WriteString("      <tr><td align='left'>\n")
     
-    contenidoApuntadores := strings.Join(valores, ", ")
-    tabla.WriteString(fmt.Sprintf("      <tr><td align='left'><font face='monospace' point-size='9'>%s</font></td></tr>\n", contenidoApuntadores))
-
+    tabla.WriteString("        <table border='0' cellborder='1' cellspacing='0'>\n")
+    for i := 0; i < 16; i += 4 {
+        tabla.WriteString("          <tr>")
+        for j := 0; j < 4 && i+j < 16; j++ {
+            if apuntadores.B_pointers[i+j] != -1 {
+                tabla.WriteString(fmt.Sprintf("<td>%d</td>", apuntadores.B_pointers[i+j]))
+            } else {
+                tabla.WriteString("<td>-1</td>")
+            }
+        }
+        tabla.WriteString("</tr>\n")
+    }
+    tabla.WriteString("        </table>\n")
+    
+    tabla.WriteString("      </td></tr>\n")
     tabla.WriteString("    </table>>];\n\n")
+    
     return tabla.String()
 }
 
