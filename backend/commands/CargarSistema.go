@@ -141,11 +141,9 @@ func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string,
         return fmt.Errorf("no se pudo obtener inodo %d", dirIno)
     }
 
-    // Buscar espacio libre en bloques existentes
     for i := 0; i < 12; i++ {
         blockIdx := ino.I_block[i]
         if blockIdx < 0 {
-            // Necesitamos crear un nuevo bloque
             newBlockIdx, err := allocBlock(f, sb)
             if err != nil {
                 return fmt.Errorf("no se pudo asignar nuevo bloque: %v", err)
@@ -153,7 +151,6 @@ func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string,
             
             ino.I_block[i] = newBlockIdx
             
-            // Inicializar el nuevo bloque
             var bc structs.BCarpeta
             for j := range bc.B_content {
                 bc.B_content[j].B_inodo = -1
@@ -162,11 +159,9 @@ func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string,
                 }
             }
             
-            // Agregar la nueva entrada
             copy(bc.B_content[0].B_name[:], name)
             bc.B_content[0].B_inodo = childIno
             
-            // Escribir el bloque
             offset := int64(sb.S_block_start) + int64(newBlockIdx)*64
             if _, err := f.Seek(offset, io.SeekStart); err != nil {
                 return err
@@ -175,7 +170,6 @@ func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string,
                 return err
             }
             
-            // Actualizar el inodo
             if err := writeInode(f, sb, dirIno, &ino); err != nil {
                 return err
             }
@@ -188,7 +182,6 @@ func addDirEntry(f *os.File, sb *structs.SuperBloque, dirIno int32, name string,
             continue
         }
 
-        // Buscar entrada libre en este bloque
         for j := range bc.B_content {
             if bc.B_content[j].B_inodo == -1 {
                 copy(bc.B_content[j].B_name[:], name)

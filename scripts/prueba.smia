@@ -1,15 +1,21 @@
 #Calificacion Proyecto 1
 #2S 2025
-#Cambiar emanuel -> por el usuario de su distribución de linux  
-#Cambiar 39 -> por los ultimos dos digitos de su carnet  
+#Cambiar "su_usuario" -> por el usuario de su distribución de linux  
+#Cambiar “39” -> por los ultimos dos digitos de su carnet  
+
+
 
 
 #----------------- 1. MKDISK  -----------------
 
 
+
+
 #----------------- MKDISK CON ERROR -----------------
 # ERROR PARAMETROS
 mkdisk -param=x -size=30 -path=/home/emanuel/Calificacion_MIA/Discos/DiscoN.mia
+
+
 
 
 #----------------- CREACION DE DISCOS -----------------
@@ -37,6 +43,8 @@ mkdisk -size=51200 -unit=K -path=/home/emanuel/Calificacion_MIA/Discos/Disco9.mi
 mkdisk -size=51200 -unit=K -path=/home/emanuel/Calificacion_MIA/Discos/Disco10.mia
 
 
+
+
 #-----------------2. RMDISK-----------------
 #ERROR DISCO NO EXISTE
 rmdisk -path=/home/emanuel/Calificacion_MIA/Discos/DiscoN.mia
@@ -50,6 +58,8 @@ rmdisk -path=/home/emanuel/Calificacion_MIA/Discos/Disco8.mia
 rmdisk -path=/home/emanuel/Calificacion_MIA/Discos/Disco9.mia
 # BORRANDO DISCO
 rmdisk -path=/home/emanuel/Calificacion_MIA/Discos/Disco10.mia
+
+
 
 
 #-----------------3. FDISK-----------------
@@ -237,13 +247,13 @@ cat -file1=/users.txt
 
 
 #-----------------11. MKUSR-----------------------------------------------
-mkusr -user="usuario1" -pass=password -grp=root
-mkusr -user="user1" -pass=abc -grp=usuarios
-mkusr -user="user2" -pass=abc -grp=usuarios
+mkusr -user=usuario1 -pass=password -grp=root
+mkusr -user=user1 -pass=abc -grp=usuarios
+mkusr -user=user2 -pass=abc -grp=usuarios
 #ERROR EL USUARIO YA EXISTE
-mkusr -user="user2" -pass=abc -grp=usuarios
+mkusr -user=user2 -pass=abc -grp=usuarios
 #ERROR GRUPO NO EXISTE
-mkusr -user="user3" -pass=abc -grp=system
+mkusr -user=user3 -pass=abc -grp=system
 
 
 
@@ -335,7 +345,7 @@ mkfile -path=/home/archivos/user/docs/Tarea2.txt -size=768
 
 
 # Cambiar la ruta del cont por la del archivo NAME.txt que creo
-mkfile -path=/home/archivos/user/docs/Tarea3.txt -size=10 -cont=/home/emanuel/Escritorio/NAME.txt
+mkfile -path=/home/archivos/user/docs/Tarea3.txt -size=10 -cont=/home/emanuel/Calificacion_MIA/CONT/NAME.txt
 
 
 
@@ -363,7 +373,7 @@ rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r2_block.jpg -name
 rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r3_bm_inode.txt -name=bm_inode
 rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r4_bm_block.txt -name=bm_block
 rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r5_sb.jpg -name=sb
-rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r6_file.txt -path_file_ls=/home/archivos/user/docs/Tarea2.txt -name=file
+rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r6_file.txt -path_file_ls=/home/archivos/user/docs/Tarea2.txt  -name=file
 rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r7_ls.jpg -path_file_ls=/home/archivos/user/docs -name=ls
 rep -id=391A -path=/home/emanuel/Calificacion_MIA/Reportes/p4_r8_tree.png -name=tree
 

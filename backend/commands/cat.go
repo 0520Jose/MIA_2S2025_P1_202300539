@@ -16,18 +16,15 @@ func Cat(params map[string]string) string {
         return "Error: No hay una sesión activa."
     }
     
-    // Recopilar todos los archivos -fileN
     fileParams := make(map[int]string)
     hasFiles := false
     
     for k, v := range params {
         lk := strings.ToLower(strings.TrimSpace(k))
         if lk == "-file" {
-            // -file sin número es -file1
             fileParams[1] = strings.TrimSpace(v)
             hasFiles = true
         } else if strings.HasPrefix(lk, "-file") {
-            // Extraer el número de -fileN
             numStr := strings.TrimPrefix(lk, "-file")
             if num, err := strconv.Atoi(numStr); err == nil && num > 0 {
                 fileParams[num] = strings.TrimSpace(v)
@@ -39,8 +36,7 @@ func Cat(params map[string]string) string {
     if !hasFiles {
         return "Error: parámetro -file es obligatorio."
     }
-    
-    // Ordenar los archivos por número para procesarlos en orden
+
     var fileNumbers []int
     for num := range fileParams {
         fileNumbers = append(fileNumbers, num)
@@ -55,7 +51,6 @@ func Cat(params map[string]string) string {
     
     var results []string
     
-    // Procesar cada archivo en orden
     for _, num := range fileNumbers {
         path := unquoteValue(fileParams[num])
         if path == "" {
@@ -67,7 +62,6 @@ func Cat(params map[string]string) string {
             continue
         }
         
-        // Manejar ruta especial para users.txt
         if path == "/users.txt" {
             path = "/home/users.txt"
         }
@@ -87,7 +81,6 @@ func Cat(params map[string]string) string {
         results = append(results, content)
     }
     
-    // Unir todos los contenidos con salto de línea
     return strings.Join(results, "\n")
 }
 
@@ -95,12 +88,10 @@ func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, e
     parts := strings.Split(path, "/")
     curr := int32(0)
     
-    // Verificar si es solo la raíz "/"
     if len(parts) <= 1 || (len(parts) == 2 && parts[1] == "") {
         return curr, nil
     }
     
-    // Navegar por cada parte del path
     for i, name := range parts[1:] {
         name = strings.TrimSpace(name)
         if name == "" {
@@ -112,7 +103,6 @@ func findInodeByPath(f *os.File, sb *structs.SuperBloque, path string) (int32, e
             return -1, fmt.Errorf("leer inodo %d: %v", curr, err)
         }
         
-        // Si no es el último elemento, debe ser un directorio
         if i < len(parts[1:])-1 {
             if ino.I_type[0] != 0 {
                 return -1, fmt.Errorf("%s no es un directorio", name)
@@ -174,7 +164,6 @@ func readFileContentWithIndirect(f *os.File, sb *structs.SuperBloque, inoIdx int
     var contenido []byte
     remaining := int(ino.I_s)
     
-    // Leer bloques directos
     for i := 0; i < DIRECT_BLOCKS && remaining > 0; i++ {
         if ino.I_block[i] == -1 {
             break
@@ -193,7 +182,7 @@ func readFileContentWithIndirect(f *os.File, sb *structs.SuperBloque, inoIdx int
         remaining -= chunk
     }
     
-    // Leer indirección simple si es necesario
+
     if remaining > 0 && ino.I_block[INDIRECT_SIMPLE] != -1 {
         pointers, err := readPointerBlock(f, sb, ino.I_block[INDIRECT_SIMPLE])
         if err != nil {

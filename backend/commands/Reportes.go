@@ -10,10 +10,8 @@ import (
     "io"
     "encoding/binary"
     "sort"
-    //"html"
 	"time"
     "bytes"
-    //"unicode"
 )
 
 func Rep(params map[string]string) string {
