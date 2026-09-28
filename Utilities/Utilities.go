@@ -7,7 +7,6 @@ import (
     "path/filepath"
 )
 
-//función para crear el archivo binario
 func CreateFile(name string) error {
     dir := filepath.Dir(name)
     if err := os.MkdirAll(dir, os.ModePerm); err != nil {
@@ -25,7 +24,6 @@ func CreateFile(name string) error {
     return nil
 }
 
-//función para abrir el archivo binario en modo lectura/escritura
 func OpenFile(name string) (*os.File, error) {
     file, err := os.OpenFile(name, os.O_RDWR, 0644)
     if err != nil {
@@ -35,7 +33,6 @@ func OpenFile(name string) (*os.File, error) {
     return file, nil
 }
 
-//función para escribir el objeto en el archivo binario
 func WriteObject(file *os.File, data interface{}, position int64) error {
     file.Seek(position, 0)
     err := binary.Write(file, binary.LittleEndian, data)
@@ -46,7 +43,6 @@ func WriteObject(file *os.File, data interface{}, position int64) error {
     return nil
 }
 
-//función para leer el objeto del archivo binario
 func ReadObject(file *os.File, data interface{}, position int64) error {
     file.Seek(position, 0)
     err := binary.Read(file, binary.LittleEndian, data)
